@@ -15,7 +15,7 @@ import './App.css'
 
 const MAX_CONTACTS = 4
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
-const relativeTime = new Intl.RelativeTimeFormat('es', { numeric: 'auto' })
+const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 
 type Notice = {
   tone: 'error' | 'info' | 'success'
@@ -42,15 +42,15 @@ function createInitialClientForm(): ClientInput {
 }
 
 function toErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Ocurrio un error inesperado.'
+  return error instanceof Error ? error.message : 'Something went wrong.'
 }
 
 function formatDateTime(isoDate: string | null) {
   if (!isoDate) {
-    return 'Pendiente'
+    return 'Pending'
   }
 
-  return new Intl.DateTimeFormat('es-CO', {
+  return new Intl.DateTimeFormat('en-US', {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(isoDate))
@@ -58,7 +58,7 @@ function formatDateTime(isoDate: string | null) {
 
 function formatRelativeDue(isoDate: string | null) {
   if (!isoDate) {
-    return 'Sin programar'
+    return 'Not scheduled'
   }
 
   const diffMs = new Date(isoDate).getTime() - Date.now()
@@ -79,18 +79,18 @@ function formatRelativeDue(isoDate: string | null) {
 
 function getClientStatusLabel(status: ClientStatus) {
   if (status === 'finished') {
-    return 'Finalizado'
+    return 'Completed'
   }
 
   if (status === 'canceled') {
-    return 'Detenido'
+    return 'Paused'
   }
 
-  return 'Activo'
+  return 'Active'
 }
 
 function getClientStageLabel(client: ClientRecord) {
-  return `${client.sentContacts}/${client.targetContacts} contactos avanzados`
+  return `${client.sentContacts}/${client.targetContacts} touchpoints completed`
 }
 
 function createAttemptStatuses(client: ClientRecord) {
@@ -321,7 +321,7 @@ function App() {
 
   async function handleDeleteClient(client: ClientRecord) {
     const shouldDelete = window.confirm(
-      `Vas a eliminar a ${client.name}. Esta accion no se puede deshacer.`,
+      `You are about to delete ${client.name}. This action cannot be undone.`,
     )
 
     if (!shouldDelete) {
@@ -349,9 +349,9 @@ function App() {
         <section className="loading-stage panel">
           <img alt="Hessa Enterprises" className="loading-wordmark" src={logoWordmark} />
           <div className="loading-copy">
-            <span className="eyebrow">Hessa Follow Up Web</span>
-            <h1>Cargando el workspace comercial...</h1>
-            <p>Estamos preparando pipeline, clientes y plantillas.</p>
+            <span className="eyebrow">Hessa Follow Up</span>
+            <h1>Loading your workspace...</h1>
+            <p>Preparing clients, schedules, and email templates.</p>
           </div>
         </section>
       </main>
@@ -362,90 +362,20 @@ function App() {
   const finishedClients = appState.clients.filter((client) => client.status === 'finished')
   const canceledClients = appState.clients.filter((client) => client.status === 'canceled')
   const statCards = [
-    { label: 'Total clientes', value: appState.stats.total },
-    { label: 'En seguimiento', value: appState.stats.active },
-    { label: 'Pendientes ahora', value: appState.stats.dueNow, tone: 'accent' },
-    { label: 'Finalizados', value: appState.stats.finished },
-    { label: 'Con error', value: appState.stats.withErrors },
-  ]
-  const heroFacts = [
-    {
-      label: 'Modo',
-      value: settingsForm.autoOpenDraftOnCreate ? 'Asistido' : 'Manual',
-      text: settingsForm.autoOpenDraftOnCreate
-        ? 'Abre el primer borrador cuando ya esta en hora.'
-        : 'Tu equipo decide cuando abrir cada correo.',
-    },
-    {
-      label: 'Cadencia',
-      value: `${settingsForm.intervalDays} dias`,
-      text: 'Cada contacto conserva el intervalo definido.',
-    },
-    {
-      label: 'Entorno',
-      value: appState.runtimeInfo.browser,
-      text: 'Toda la operacion vive en este navegador.',
-    },
-  ]
-  const operatingNotes = [
-    {
-      title: 'Visibilidad total',
-      text: 'Clientes, horarios y estado del pipeline en una sola superficie de trabajo.',
-    },
-    {
-      title: 'Borradores precisos',
-      text: 'Cada intento queda listo con asunto, mensaje y contexto comercial.',
-    },
-    {
-      title: 'Control local',
-      text: 'El workspace es ligero, privado y no depende de una capa desktop.',
-    },
-  ]
-  const mastheadStats = [
-    {
-      label: 'Pendientes ahora',
-      value: String(appState.stats.dueNow),
-      detail: 'listos para abrir',
-    },
-    {
-      label: 'Entorno',
-      value: appState.runtimeInfo.browser,
-      detail: 'workspace web',
-    },
-    {
-      label: 'Cadencia base',
-      value: `${settingsForm.intervalDays} dias`,
-      detail: 'entre contactos',
-    },
+    { label: 'Total clients', value: appState.stats.total },
+    { label: 'Active sequences', value: appState.stats.active },
+    { label: 'Due now', value: appState.stats.dueNow, tone: 'accent' },
+    { label: 'Completed', value: appState.stats.finished },
+    { label: 'With errors', value: appState.stats.withErrors },
   ]
 
   return (
     <main className="crm-shell">
-      <header className="masthead">
-        <div className="masthead-brand">
-          <span className="eyebrow">Hessa Enterprises</span>
-          <div className="masthead-copy">
-            <strong>Follow-up web workspace</strong>
-            <p>Un sistema mas limpio para operar seguimiento, contexto y cadencia comercial.</p>
-          </div>
-        </div>
-
-        <div className="masthead-meta">
-          {mastheadStats.map((item) => (
-            <div className="masthead-meta-card" key={item.label}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-              <small>{item.detail}</small>
-            </div>
-          ))}
-        </div>
-      </header>
-
       <section className="hero-grid">
         <article className="panel brand-stage">
           <div className="brand-stage-header">
-            <span className="eyebrow">Sistema comercial</span>
-            <span className="stage-chip">Pipeline visibility</span>
+            <span className="eyebrow">Hessa Enterprises</span>
+            <span className="stage-chip">Web app</span>
           </div>
 
           <div className="brand-stage-visual">
@@ -454,30 +384,21 @@ function App() {
           </div>
 
           <div className="brand-stage-footer">
-            <span className="brand-caption">Sales follow-up operating system</span>
-            <h2>Una operacion mas serena, clara y lista para ejecutarse.</h2>
+            <span className="brand-caption">Client follow-up workspace</span>
+            <h2>Built for clean, structured outbound follow-up.</h2>
             <p>
-              Disena cada secuencia, conserva el contexto del cliente y manten visible
-              el siguiente paso sin ruido visual.
+              This page helps your team manage clients, schedule each outreach
+              touchpoint, and open ready-to-send drafts from one organized workspace.
             </p>
-          </div>
-
-          <div className="brand-principles">
-            {operatingNotes.map((item) => (
-              <article className="brand-principle" key={item.title}>
-                <span>{item.title}</span>
-                <p>{item.text}</p>
-              </article>
-            ))}
           </div>
         </article>
 
         <article className="panel hero-brief">
-          <span className="eyebrow">Cabina comercial</span>
-          <h1>Un sistema sobrio para coordinar cada seguimiento comercial.</h1>
+          <span className="eyebrow">Follow-up operations</span>
+          <h1>A minimal workspace for thoughtful sales follow-up.</h1>
           <p className="lede">
-            Centraliza clientes, programa intentos y abre los correos como borradores
-            desde un espacio mas ordenado, profesional y facil de operar.
+            Track every client, control timing, and keep each next step visible without
+            the clutter of a traditional dashboard.
           </p>
 
           <div className="hero-action-bar">
@@ -487,32 +408,20 @@ function App() {
               onClick={() => void handleProcessQueue()}
               type="button"
             >
-              {isProcessingQueue ? 'Abriendo siguiente borrador...' : 'Abrir siguiente borrador'}
+              {isProcessingQueue ? 'Opening next draft...' : 'Open next draft'}
             </button>
 
-            <div className="hero-runtime">
-              <span>Entorno activo</span>
-              <strong>{appState.runtimeInfo.browser}</strong>
-              <small>Workspace web con datos locales en este navegador.</small>
-            </div>
-          </div>
-
-          <div className="hero-fact-grid">
-            {heroFacts.map((fact) => (
-              <div className="hero-fact-card" key={fact.label}>
-                <span>{fact.label}</span>
-                <strong>{fact.value}</strong>
-                <p>{fact.text}</p>
-              </div>
-            ))}
+            <p className="action-note">
+              Opens the next scheduled email as a draft in your default mail app.
+            </p>
           </div>
         </article>
       </section>
 
       <div className="notice notice-info">
-        Esta version web guarda la operacion en <code>localStorage</code> y abre cada
-        correo como borrador. Si luego quieres envios automaticos reales, el siguiente
-        paso natural seria integrar un backend o un proveedor de email.
+        This web version stores its data in <code>localStorage</code> and opens each
+        email as a draft. If you want fully automated sending later, the next step is a
+        backend or an email provider integration.
       </div>
 
       {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
@@ -535,19 +444,19 @@ function App() {
             <div className="studio-heading">
               <span className="section-index">01</span>
               <div>
-                <span className="eyebrow">Captura</span>
-                <h2>Crear un flujo nuevo</h2>
+                <span className="eyebrow">Intake</span>
+                <h2>Create a new sequence</h2>
               </div>
             </div>
 
             <form className="stack-form" onSubmit={handleClientSubmit}>
               <label className="field">
-                <span>Nombre del cliente</span>
+                <span>Client name</span>
                 <input
                   onChange={(event) =>
                     setClientForm((current) => ({ ...current, name: event.target.value }))
                   }
-                  placeholder="Ej. Laura Ramirez"
+                  placeholder="e.g. Laura Ramirez"
                   required
                   type="text"
                   value={clientForm.name}
@@ -556,12 +465,12 @@ function App() {
 
               <div className="field-row">
                 <label className="field">
-                  <span>Correo</span>
+                  <span>Email</span>
                   <input
                     onChange={(event) =>
                       setClientForm((current) => ({ ...current, email: event.target.value }))
                     }
-                    placeholder="cliente@empresa.com"
+                    placeholder="client@company.com"
                     required
                     type="email"
                     value={clientForm.email}
@@ -569,12 +478,12 @@ function App() {
                 </label>
 
                 <label className="field">
-                  <span>Empresa</span>
+                  <span>Company</span>
                   <input
                     onChange={(event) =>
                       setClientForm((current) => ({ ...current, company: event.target.value }))
                     }
-                    placeholder="Opcional"
+                    placeholder="Optional"
                     type="text"
                     value={clientForm.company}
                   />
@@ -582,12 +491,12 @@ function App() {
               </div>
 
               <label className="field">
-                <span>Notas internas</span>
+                <span>Internal notes</span>
                 <textarea
                   onChange={(event) =>
                     setClientForm((current) => ({ ...current, notes: event.target.value }))
                   }
-                  placeholder="Contexto comercial, observaciones, prioridad..."
+                  placeholder="Context, objections, timing, priority..."
                   rows={4}
                   value={clientForm.notes}
                 />
@@ -595,7 +504,7 @@ function App() {
 
               <div className="composer-topline">
                 <label className="field compact-field">
-                  <span>Contactos maximos</span>
+                  <span>Max touchpoints</span>
                   <select
                     className="select-input"
                     onChange={(event) => updateClientSchedule(Number(event.target.value))}
@@ -613,16 +522,16 @@ function App() {
                 </label>
 
                 <div className="composer-note">
-                  <span>Cadencia aplicada</span>
-                  <strong>{settingsForm.intervalDays} dias entre cada intento</strong>
-                  <small>Las horas siguientes se asignan por contacto individual.</small>
+                  <span>Sequence timing</span>
+                  <strong>{settingsForm.intervalDays} days between touchpoints</strong>
+                  <small>Each slot below sets the send time for that step in the sequence.</small>
                 </div>
               </div>
 
               <div className="schedule-board">
                 {clientForm.contactScheduleTimes.map((time, index) => (
                   <label className="schedule-tile" key={`contact-time-${index + 1}`}>
-                    <span>Intento {index + 1}</span>
+                    <span>Touchpoint {index + 1}</span>
                     <input
                       onChange={(event) =>
                         setClientForm((current) => ({
@@ -641,7 +550,7 @@ function App() {
               </div>
 
               <button className="primary-button full-width" disabled={isSubmittingClient} type="submit">
-                {isSubmittingClient ? 'Guardando cliente...' : 'Guardar cliente'}
+                {isSubmittingClient ? 'Saving client...' : 'Save client'}
               </button>
             </form>
           </article>
@@ -650,29 +559,29 @@ function App() {
             <div className="studio-heading">
               <span className="section-index">02</span>
               <div>
-                <span className="eyebrow">Ajustes</span>
-                <h2>Identidad y reglas del flujo</h2>
+                <span className="eyebrow">Settings</span>
+                <h2>Brand and workflow settings</h2>
               </div>
             </div>
 
             <form className="stack-form" onSubmit={handleSaveSettings}>
               <div className="field-row">
                 <label className="field">
-                  <span>Correo de referencia</span>
+                  <span>Reference email</span>
                   <input
                     onChange={(event) =>
                       setSettingsForm((current) =>
                         current ? { ...current, fromEmail: event.target.value } : current,
                       )
                     }
-                    placeholder="ventas@empresa.com"
+                    placeholder="sales@company.com"
                     type="email"
                     value={settingsForm.fromEmail}
                   />
                 </label>
 
                 <label className="field">
-                  <span>Nombre visible</span>
+                  <span>Display name</span>
                   <input
                     onChange={(event) =>
                       setSettingsForm((current) =>
@@ -688,7 +597,7 @@ function App() {
 
               <div className="field-row">
                 <label className="field compact-field">
-                  <span>Intervalo entre contactos</span>
+                  <span>Days between touchpoints</span>
                   <input
                     inputMode="numeric"
                     onChange={(event) =>
@@ -703,9 +612,9 @@ function App() {
                 </label>
 
                 <div className="composer-note">
-                  <span>Salida del correo</span>
-                  <strong>Asistida por tu navegador</strong>
-                  <small>La cuenta final depende del cliente de correo que abras.</small>
+                  <span>Draft delivery</span>
+                  <strong>Handled by your browser</strong>
+                  <small>The final sending account depends on the mail app you open.</small>
                 </div>
               </div>
 
@@ -721,11 +630,11 @@ function App() {
                   }
                   type="checkbox"
                 />
-                <span>Abrir el primer borrador automaticamente si ya esta en hora</span>
+                <span>Open the first draft automatically when it is already due</span>
               </label>
 
               <button className="secondary-button full-width" disabled={isSavingSettings} type="submit">
-                {isSavingSettings ? 'Guardando configuracion...' : 'Guardar configuracion'}
+                {isSavingSettings ? 'Saving settings...' : 'Save settings'}
               </button>
             </form>
           </article>
@@ -734,8 +643,8 @@ function App() {
             <div className="studio-heading">
               <span className="section-index">03</span>
               <div>
-                <span className="eyebrow">Plantillas</span>
-                <h2>Editar mensajes por intento</h2>
+                <span className="eyebrow">Templates</span>
+                <h2>Edit email copy by touchpoint</h2>
               </div>
             </div>
 
@@ -743,12 +652,12 @@ function App() {
               {settingsForm.templates.map((template, index) => (
                 <div className="template-editor" key={template.id}>
                   <div className="template-editor-head">
-                    <strong>{template.title}</strong>
-                    <span>Correo {index + 1}</span>
+                    <strong>{`Touchpoint ${index + 1}`}</strong>
+                    <span>Email copy</span>
                   </div>
 
                   <label className="field">
-                    <span>Asunto</span>
+                    <span>Subject line</span>
                     <input
                       onChange={(event) =>
                         setSettingsForm((current) =>
@@ -770,7 +679,7 @@ function App() {
                   </label>
 
                   <label className="field">
-                    <span>Cuerpo</span>
+                    <span>Body</span>
                     <textarea
                       onChange={(event) =>
                         setSettingsForm((current) =>
@@ -804,7 +713,7 @@ function App() {
               onClick={() => void saveSettingsChanges()}
               type="button"
             >
-              {isSavingSettings ? 'Guardando plantillas...' : 'Guardar plantillas y reglas'}
+              {isSavingSettings ? 'Saving templates...' : 'Save templates'}
             </button>
           </article>
         </div>
@@ -813,22 +722,11 @@ function App() {
           <article className="panel board-stage">
             <div className="board-stage-copy">
               <span className="eyebrow">Pipeline</span>
-              <h2>La cola comercial siempre visible</h2>
+              <h2>Your follow-up queue, completed sequences, and paused work.</h2>
               <p>
-                Activos, finalizados y pausados quedan ordenados para operar con menos
-                friccion y mas claridad sobre el siguiente paso.
+                Every client stays visible in a simple structure so you can focus on
+                timing, copy, and next actions instead of navigating clutter.
               </p>
-            </div>
-
-            <div className="board-stage-pillbox">
-              <div className="board-chip">
-                <span>Activos</span>
-                <strong>{activeClients.length}</strong>
-              </div>
-              <div className="board-chip">
-                <span>Finalizados</span>
-                <strong>{finishedClients.length}</strong>
-              </div>
             </div>
           </article>
 
@@ -836,15 +734,15 @@ function App() {
             <div className="section-banner">
               <div>
                 <span className="eyebrow">Live queue</span>
-                <h3>Clientes en seguimiento</h3>
+                <h3>Active follow-up queue</h3>
               </div>
               <span className="section-count">{activeClients.length}</span>
             </div>
 
             {activeClients.length === 0 ? (
               <article className="panel empty-state">
-                <h3>No hay clientes activos</h3>
-                <p>Cuando agregues clientes nuevos apareceran aqui con toda su secuencia.</p>
+                <h3>No active clients yet</h3>
+                <p>New client sequences will appear here as soon as you create them.</p>
               </article>
             ) : (
               <div className="board-list">
@@ -865,12 +763,12 @@ function App() {
                           </div>
                           <h3>{client.name}</h3>
                           <p className="client-subtitle">
-                            {client.company || 'Sin empresa'} · {client.email}
+                            {client.company || 'No company'} · {client.email}
                           </p>
                         </div>
 
                         <div className="next-window">
-                          <span>Proximo borrador</span>
+                          <span>Next draft</span>
                           <strong>{formatRelativeDue(client.nextContactAt)}</strong>
                           <small>{formatDateTime(client.nextContactAt)}</small>
                         </div>
@@ -878,14 +776,14 @@ function App() {
 
                       {isLastAttempt ? (
                         <div className="final-attempt-banner">
-                          Este cliente esta entrando en su ultimo intento programado.
+                          This client is moving into the final scheduled touchpoint.
                         </div>
                       ) : null}
 
                       <div className="attempt-track">
                         {attemptStatuses.map((status, index) => (
                           <div className={`attempt-node attempt-node-${status}`} key={`${client.id}-${index + 1}`}>
-                            <span>Intento {index + 1}</span>
+                            <span>{`Touchpoint ${index + 1}`}</span>
                             <strong>{client.contactScheduleTimes[index]}</strong>
                           </div>
                         ))}
@@ -893,15 +791,15 @@ function App() {
 
                       <div className="meta-grid">
                         <div className="meta-card">
-                          <span className="meta-label">Contactos avanzados</span>
+                          <span className="meta-label">Completed</span>
                           <strong>{client.sentContacts}</strong>
                         </div>
                         <div className="meta-card">
-                          <span className="meta-label">Ultimo borrador</span>
+                          <span className="meta-label">Last draft</span>
                           <strong>{formatDateTime(client.lastContactAt)}</strong>
                         </div>
                         <div className="meta-card">
-                          <span className="meta-label">Creado</span>
+                          <span className="meta-label">Created</span>
                           <strong>{formatDateTime(client.createdAt)}</strong>
                         </div>
                       </div>
@@ -916,7 +814,7 @@ function App() {
                           onClick={() => void handleSendClient(client.id)}
                           type="button"
                         >
-                          {isBusy ? 'Abriendo...' : 'Abrir borrador'}
+                          {isBusy ? 'Opening...' : 'Open draft'}
                         </button>
 
                         <button
@@ -925,26 +823,26 @@ function App() {
                           onClick={() => void handleToggleClient(client)}
                           type="button"
                         >
-                          Detener cliente
+                          Pause client
                         </button>
                       </div>
 
                       <div className="history-stack">
                         <div className="history-header">
-                          <span className="eyebrow">Actividad reciente</span>
+                          <span className="eyebrow">Recent activity</span>
                         </div>
 
                         {client.history.length === 0 ? (
                           <p className="history-empty">
-                            Aun no se ha abierto ningun borrador para este cliente.
+                            No drafts have been opened for this client yet.
                           </p>
                         ) : (
                           client.history.slice(0, 4).map((item) => (
                             <div className="history-row" key={item.id}>
                               <div className="history-main">
                                 <strong>
-                                  Intento {item.contactNumber} ·{' '}
-                                  {item.status === 'prepared' ? 'Borrador abierto' : 'Con error'}
+                                  {`Touchpoint ${item.contactNumber}`} ·{' '}
+                                  {item.status === 'prepared' ? 'Draft opened' : 'Error'}
                                 </strong>
                                 <span>{item.subject}</span>
                               </div>
@@ -967,15 +865,15 @@ function App() {
             <div className="section-banner">
               <div>
                 <span className="eyebrow">Completed</span>
-                <h3>Flujos finalizados</h3>
+                <h3>Completed sequences</h3>
               </div>
               <span className="section-count">{finishedClients.length}</span>
             </div>
 
             {finishedClients.length === 0 ? (
               <article className="panel empty-state">
-                <h3>Sin clientes finalizados</h3>
-                <p>Los clientes que completen todos sus intentos apareceran aqui.</p>
+                <h3>No completed sequences yet</h3>
+                <p>Clients that finish every planned touchpoint will appear here.</p>
               </article>
             ) : (
               <div className="board-list">
@@ -987,34 +885,34 @@ function App() {
                       <div className="archive-top">
                         <div>
                           <div className="identity-row">
-                            <span className="status-pill pill-finished">Finalizado</span>
+                            <span className="status-pill pill-finished">Completed</span>
                             <span className="meta-pill">{getClientStageLabel(client)}</span>
                           </div>
                           <h3>{client.name}</h3>
                           <p className="client-subtitle">
-                            Flujo completado con {client.sentContacts} de {client.targetContacts}{' '}
-                            intentos.
+                            Sequence completed with {client.sentContacts} of {client.targetContacts}{' '}
+                            touchpoints.
                           </p>
                         </div>
                       </div>
 
                       <div className="archive-highlight">
-                        <strong>Secuencia cerrada correctamente</strong>
-                        <span>Puedes conservar este registro como referencia o archivarlo.</span>
+                        <strong>Sequence successfully closed</strong>
+                        <span>Keep this record for reference or remove it from the workspace.</span>
                       </div>
 
                       <div className="meta-grid">
                         <div className="meta-card">
-                          <span className="meta-label">Finalizado</span>
+                          <span className="meta-label">Completed on</span>
                           <strong>{formatDateTime(client.finishedAt)}</strong>
                         </div>
                         <div className="meta-card">
-                          <span className="meta-label">Ultimo borrador</span>
+                          <span className="meta-label">Last draft</span>
                           <strong>{formatDateTime(client.lastContactAt)}</strong>
                         </div>
                         <div className="meta-card">
-                          <span className="meta-label">Empresa</span>
-                          <strong>{client.company || 'Sin empresa'}</strong>
+                          <span className="meta-label">Company</span>
+                          <strong>{client.company || 'No company'}</strong>
                         </div>
                       </div>
 
@@ -1024,7 +922,7 @@ function App() {
                         onClick={() => void handleDeleteClient(client)}
                         type="button"
                       >
-                        {isBusy ? 'Eliminando...' : 'Eliminar cliente'}
+                        {isBusy ? 'Deleting...' : 'Delete client'}
                       </button>
                     </article>
                   )
@@ -1038,7 +936,7 @@ function App() {
               <div className="section-banner">
                 <div>
                   <span className="eyebrow">Paused</span>
-                  <h3>Clientes detenidos manualmente</h3>
+                  <h3>Paused clients</h3>
                 </div>
                 <span className="section-count">{canceledClients.length}</span>
               </div>
@@ -1059,14 +957,14 @@ function App() {
                           </div>
                           <h3>{client.name}</h3>
                           <p className="client-subtitle">
-                            {client.company || 'Sin empresa'} · {client.email}
+                            {client.company || 'No company'} · {client.email}
                           </p>
                         </div>
 
                         <div className="next-window muted-window">
-                          <span>Detenido</span>
+                          <span>Paused on</span>
                           <strong>{formatDateTime(client.canceledAt)}</strong>
-                          <small>Listo para reactivar</small>
+                          <small>Ready to resume</small>
                         </div>
                       </div>
 
@@ -1076,7 +974,7 @@ function App() {
                         onClick={() => void handleToggleClient(client)}
                         type="button"
                       >
-                        {isBusy ? 'Reprogramando...' : 'Reactivar cliente'}
+                        {isBusy ? 'Rescheduling...' : 'Resume client'}
                       </button>
                     </article>
                   )

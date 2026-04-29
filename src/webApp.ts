@@ -30,7 +30,28 @@ function createDefaultTemplates() {
 
     return {
       id: `contact-${contactNumber}`,
-      title: `Contacto ${contactNumber}`,
+      title: `Touchpoint ${contactNumber}`,
+      subject: `Follow-up ${contactNumber} of {{maxContacts}} for {{name}}`,
+      body: [
+        'Hi {{name}},',
+        '',
+        `I wanted to follow up on touchpoint ${contactNumber} of {{maxContacts}}.`,
+        'We are still available to answer questions and help you move forward.',
+        '',
+        'If you would like to continue the conversation, just reply and we will take it from there.',
+        '',
+        'Best,',
+        '{{fromName}}',
+      ].join('\n'),
+    }
+  })
+}
+
+function createLegacyDefaultTemplates() {
+  return Array.from({ length: MAX_CONTACTS }, (_, index) => {
+    const contactNumber = index + 1
+
+    return {
       subject: `Seguimiento ${contactNumber} de {{maxContacts}} para {{name}}`,
       body: [
         'Hola {{name}},',
@@ -99,6 +120,7 @@ function normalizeScheduleTime(value: unknown, fallback = '09:00') {
 
 function normalizeTemplates(rawTemplates: unknown) {
   const defaults = createDefaultTemplates()
+  const legacyDefaults = createLegacyDefaultTemplates()
 
   if (!Array.isArray(rawTemplates) || rawTemplates.length === 0) {
     return defaults
@@ -106,13 +128,16 @@ function normalizeTemplates(rawTemplates: unknown) {
 
   return defaults.map((template, index) => {
     const incomingTemplate = rawTemplates[index]
+    const legacyTemplate = legacyDefaults[index]
     const subject =
       incomingTemplate &&
       typeof incomingTemplate === 'object' &&
       'subject' in incomingTemplate &&
       typeof incomingTemplate.subject === 'string' &&
       incomingTemplate.subject.trim()
-        ? incomingTemplate.subject
+        ? incomingTemplate.subject === legacyTemplate.subject
+          ? template.subject
+          : incomingTemplate.subject
         : template.subject
     const body =
       incomingTemplate &&
@@ -120,7 +145,9 @@ function normalizeTemplates(rawTemplates: unknown) {
       'body' in incomingTemplate &&
       typeof incomingTemplate.body === 'string' &&
       incomingTemplate.body.trim()
-        ? incomingTemplate.body
+        ? incomingTemplate.body === legacyTemplate.body
+          ? template.body
+          : incomingTemplate.body
         : template.body
 
     return {
@@ -450,14 +477,14 @@ function getNextScheduledAt(
 }
 
 function toDateLabel(isoDate: string) {
-  return new Intl.DateTimeFormat('es-CO', {
+  return new Intl.DateTimeFormat('en-US', {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(isoDate))
 }
 
 function toTimeLabel(isoDate: string) {
-  return new Intl.DateTimeFormat('es-CO', {
+  return new Intl.DateTimeFormat('en-US', {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(isoDate))
@@ -528,7 +555,7 @@ function openMailDraft(recipient: string, subject: string, body: string) {
 
 function getRuntimeInfo(): RuntimeInfo {
   const userAgent = navigator.userAgent
-  let browser = 'Navegador actual'
+  let browser = 'Current browser'
 
   if (userAgent.includes('Edg/')) {
     browser = 'Microsoft Edge'
@@ -675,7 +702,7 @@ export const webApp = {
       ...getAppStateFromDatabase(persisted),
       result: {
         failed: 0,
-        message: 'Configuracion web guardada correctamente.',
+        message: 'Workspace settings saved successfully.',
         processed: 0,
         sent: 0,
       },
@@ -690,11 +717,11 @@ export const webApp = {
     const targetContacts = clampTargetContacts(clientInput.targetContacts)
 
     if (!name) {
-      throw new Error('El nombre del cliente es obligatorio.')
+      throw new Error('Client name is required.')
     }
 
     if (!isValidEmail(email)) {
-      throw new Error('Debes ingresar un correo valido para el cliente.')
+      throw new Error('Please enter a valid client email address.')
     }
 
     const contactScheduleTimes = Array.from({ length: targetContacts }, (_, index) =>
@@ -747,7 +774,7 @@ export const webApp = {
       ...getAppStateFromDatabase(loadDatabase()),
       result: {
         failed: 0,
-        message: `Cliente agregado. Primer borrador programado para ${toDateLabel(client.nextContactAt)}.`,
+        message: `Client added. First draft scheduled for ${toDateLabel(client.nextContactAt)}.`,
         processed: 0,
         sent: 0,
       },
@@ -763,7 +790,7 @@ export const webApp = {
         ...getAppStateFromDatabase(database),
         result: {
           failed: 0,
-          message: 'No hay seguimientos pendientes para abrir.',
+          message: 'There are no scheduled follow-ups ready to open.',
           processed: 0,
           sent: 0,
         },
@@ -773,7 +800,7 @@ export const webApp = {
     const client = database.clients.find((item) => item.id === candidates[0].id)
 
     if (!client) {
-      throw new Error('No encontre el cliente que estaba pendiente en la cola.')
+      throw new Error('The next client in the queue could not be found.')
     }
 
     advanceClientWithDraft(database, client)
@@ -781,33 +808,33 @@ export const webApp = {
     const remainingDue = selectClientsForProcessing(persisted.clients).length
     const suffix =
       remainingDue > 0
-        ? ` Quedan ${remainingDue} seguimientos pendientes por abrir.`
+        ? ` ${remainingDue} more scheduled follow-ups are still due.`
         : ''
 
     return buildOperationResponse(
       persisted,
-      `Se abrio el siguiente borrador para ${client.name}.${suffix}`,
+      `Opened the next draft for ${client.name}.${suffix}`,
     )
   },
 
   async sendClientFollowUp(clientId: string) {
     if (!clientId) {
-      throw new Error('Hace falta indicar el cliente que quieres procesar.')
+      throw new Error('A client must be selected before opening a draft.')
     }
 
     const database = loadDatabase()
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
-      throw new Error('No encontre el cliente solicitado.')
+      throw new Error('The selected client could not be found.')
     }
 
     if (client.status !== 'active') {
-      throw new Error('Solo puedes abrir borradores para clientes activos.')
+      throw new Error('Only active clients can open follow-up drafts.')
     }
 
     if (client.sentContacts >= client.targetContacts) {
-      throw new Error('Este cliente ya completo su secuencia.')
+      throw new Error('This client has already completed the full sequence.')
     }
 
     advanceClientWithDraft(database, client)
@@ -815,7 +842,7 @@ export const webApp = {
 
     return buildOperationResponse(
       persisted,
-      `Se abrio el borrador del intento ${client.sentContacts} para ${client.name}.`,
+      `Opened touchpoint ${client.sentContacts} for ${client.name}.`,
     )
   },
 
@@ -824,14 +851,14 @@ export const webApp = {
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
-      throw new Error('No encontre el cliente solicitado.')
+      throw new Error('The selected client could not be found.')
     }
 
     const now = new Date().toISOString()
 
     if (nextStatus === 'active') {
       if (client.status === 'finished' || client.sentContacts >= client.targetContacts) {
-        throw new Error('Este cliente ya finalizo su secuencia y ahora puede eliminarse.')
+        throw new Error('This client has already completed the sequence and can now be removed.')
       }
 
       client.status = 'active'
@@ -860,8 +887,8 @@ export const webApp = {
         failed: 0,
         message:
           nextStatus === 'active'
-            ? 'Cliente reactivado y reprogramado.'
-            : 'Cliente detenido correctamente.',
+            ? 'Client resumed and rescheduled.'
+            : 'Client paused successfully.',
         processed: 0,
         sent: 0,
       },
@@ -870,14 +897,14 @@ export const webApp = {
 
   async deleteClient(clientId: string) {
     if (!clientId) {
-      throw new Error('Hace falta indicar el cliente que quieres eliminar.')
+      throw new Error('A client must be selected before deletion.')
     }
 
     const database = loadDatabase()
     const clientIndex = database.clients.findIndex((item) => item.id === clientId)
 
     if (clientIndex === -1) {
-      throw new Error('No encontre el cliente solicitado.')
+      throw new Error('The selected client could not be found.')
     }
 
     database.clients.splice(clientIndex, 1)
@@ -887,7 +914,7 @@ export const webApp = {
       ...getAppStateFromDatabase(persisted),
       result: {
         failed: 0,
-        message: 'Cliente eliminado correctamente.',
+        message: 'Client deleted successfully.',
         processed: 0,
         sent: 0,
       },
