@@ -350,8 +350,8 @@ function App() {
           <img alt="Hessa Enterprises" className="loading-wordmark" src={logoWordmark} />
           <div className="loading-copy">
             <span className="eyebrow">Hessa Follow Up Web</span>
-            <h1>Cargando la cabina web...</h1>
-            <p>Estamos preparando clientes, horarios y plantillas.</p>
+            <h1>Cargando el workspace comercial...</h1>
+            <p>Estamos preparando pipeline, clientes y plantillas.</p>
           </div>
         </section>
       </main>
@@ -370,31 +370,82 @@ function App() {
   ]
   const heroFacts = [
     {
-      label: 'Operacion',
-      value: settingsForm.autoOpenDraftOnCreate ? 'Asistida' : 'Manual',
+      label: 'Modo',
+      value: settingsForm.autoOpenDraftOnCreate ? 'Asistido' : 'Manual',
       text: settingsForm.autoOpenDraftOnCreate
-        ? 'Si el primer contacto ya esta en hora, se abre el borrador automaticamente.'
-        : 'Tu decides cuando abrir cada borrador del seguimiento.',
+        ? 'Abre el primer borrador cuando ya esta en hora.'
+        : 'Tu equipo decide cuando abrir cada correo.',
     },
     {
       label: 'Cadencia',
       value: `${settingsForm.intervalDays} dias`,
-      text: 'Entre cada contacto se respeta el intervalo configurado.',
+      text: 'Cada contacto conserva el intervalo definido.',
     },
     {
       label: 'Entorno',
       value: appState.runtimeInfo.browser,
-      text: 'Los datos se guardan solo en este navegador.',
+      text: 'Toda la operacion vive en este navegador.',
+    },
+  ]
+  const operatingNotes = [
+    {
+      title: 'Visibilidad total',
+      text: 'Clientes, horarios y estado del pipeline en una sola superficie de trabajo.',
+    },
+    {
+      title: 'Borradores precisos',
+      text: 'Cada intento queda listo con asunto, mensaje y contexto comercial.',
+    },
+    {
+      title: 'Control local',
+      text: 'El workspace es ligero, privado y no depende de una capa desktop.',
+    },
+  ]
+  const mastheadStats = [
+    {
+      label: 'Pendientes ahora',
+      value: String(appState.stats.dueNow),
+      detail: 'listos para abrir',
+    },
+    {
+      label: 'Entorno',
+      value: appState.runtimeInfo.browser,
+      detail: 'workspace web',
+    },
+    {
+      label: 'Cadencia base',
+      value: `${settingsForm.intervalDays} dias`,
+      detail: 'entre contactos',
     },
   ]
 
   return (
     <main className="crm-shell">
+      <header className="masthead">
+        <div className="masthead-brand">
+          <span className="eyebrow">Hessa Enterprises</span>
+          <div className="masthead-copy">
+            <strong>Follow-up web workspace</strong>
+            <p>Un sistema mas limpio para operar seguimiento, contexto y cadencia comercial.</p>
+          </div>
+        </div>
+
+        <div className="masthead-meta">
+          {mastheadStats.map((item) => (
+            <div className="masthead-meta-card" key={item.label}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+              <small>{item.detail}</small>
+            </div>
+          ))}
+        </div>
+      </header>
+
       <section className="hero-grid">
         <article className="panel brand-stage">
           <div className="brand-stage-header">
-            <span className="eyebrow">Hessa Enterprises</span>
-            <span className="stage-chip">Follow-up web workspace</span>
+            <span className="eyebrow">Sistema comercial</span>
+            <span className="stage-chip">Pipeline visibility</span>
           </div>
 
           <div className="brand-stage-visual">
@@ -404,19 +455,29 @@ function App() {
 
           <div className="brand-stage-footer">
             <span className="brand-caption">Sales follow-up operating system</span>
+            <h2>Una operacion mas serena, clara y lista para ejecutarse.</h2>
             <p>
-              Una version web para organizar seguimientos comerciales, abrir borradores
-              y mantener visible el estado de cada cliente.
+              Disena cada secuencia, conserva el contexto del cliente y manten visible
+              el siguiente paso sin ruido visual.
             </p>
+          </div>
+
+          <div className="brand-principles">
+            {operatingNotes.map((item) => (
+              <article className="brand-principle" key={item.title}>
+                <span>{item.title}</span>
+                <p>{item.text}</p>
+              </article>
+            ))}
           </div>
         </article>
 
         <article className="panel hero-brief">
-          <span className="eyebrow">Hessa Follow Up Web</span>
-          <h1>Una cabina web mas clara para mover cada seguimiento comercial.</h1>
+          <span className="eyebrow">Cabina comercial</span>
+          <h1>Un sistema sobrio para coordinar cada seguimiento comercial.</h1>
           <p className="lede">
-            Define cuantas veces contactar a cada cliente, programa la hora exacta de
-            cada intento y abre los correos como borradores desde una sola vista.
+            Centraliza clientes, programa intentos y abre los correos como borradores
+            desde un espacio mas ordenado, profesional y facil de operar.
           </p>
 
           <div className="hero-action-bar">
@@ -426,14 +487,13 @@ function App() {
               onClick={() => void handleProcessQueue()}
               type="button"
             >
-              {isProcessingQueue
-                ? 'Abriendo siguiente borrador...'
-                : 'Abrir siguiente borrador pendiente'}
+              {isProcessingQueue ? 'Abriendo siguiente borrador...' : 'Abrir siguiente borrador'}
             </button>
 
             <div className="hero-runtime">
+              <span>Entorno activo</span>
               <strong>{appState.runtimeInfo.browser}</strong>
-              <span>Web app · datos locales en este navegador</span>
+              <small>Workspace web con datos locales en este navegador.</small>
             </div>
           </div>
 
@@ -450,10 +510,9 @@ function App() {
       </section>
 
       <div className="notice notice-info">
-        Esta version web guarda la informacion en <code>localStorage</code> y abre los
-        correos como borradores en tu cliente de correo predeterminado. Si mas adelante
-        quieres envio automatico real, el siguiente paso seria agregar un backend o un
-        servicio de correo.
+        Esta version web guarda la operacion en <code>localStorage</code> y abre cada
+        correo como borrador. Si luego quieres envios automaticos reales, el siguiente
+        paso natural seria integrar un backend o un proveedor de email.
       </div>
 
       {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
@@ -476,7 +535,7 @@ function App() {
             <div className="studio-heading">
               <span className="section-index">01</span>
               <div>
-                <span className="eyebrow">Client intake</span>
+                <span className="eyebrow">Captura</span>
                 <h2>Crear un flujo nuevo</h2>
               </div>
             </div>
@@ -554,8 +613,9 @@ function App() {
                 </label>
 
                 <div className="composer-note">
+                  <span>Cadencia aplicada</span>
                   <strong>{settingsForm.intervalDays} dias entre cada intento</strong>
-                  <span>Las horas siguientes se usan por intento individual.</span>
+                  <small>Las horas siguientes se asignan por contacto individual.</small>
                 </div>
               </div>
 
@@ -590,7 +650,7 @@ function App() {
             <div className="studio-heading">
               <span className="section-index">02</span>
               <div>
-                <span className="eyebrow">Web setup</span>
+                <span className="eyebrow">Ajustes</span>
                 <h2>Identidad y reglas del flujo</h2>
               </div>
             </div>
@@ -643,8 +703,9 @@ function App() {
                 </label>
 
                 <div className="composer-note">
-                  <strong>Salida asistida por tu navegador</strong>
-                  <span>La cuenta real que enviara el correo depende de tu app de mail.</span>
+                  <span>Salida del correo</span>
+                  <strong>Asistida por tu navegador</strong>
+                  <small>La cuenta final depende del cliente de correo que abras.</small>
                 </div>
               </div>
 
@@ -664,7 +725,7 @@ function App() {
               </label>
 
               <button className="secondary-button full-width" disabled={isSavingSettings} type="submit">
-                {isSavingSettings ? 'Guardando configuracion...' : 'Guardar configuracion web'}
+                {isSavingSettings ? 'Guardando configuracion...' : 'Guardar configuracion'}
               </button>
             </form>
           </article>
@@ -673,7 +734,7 @@ function App() {
             <div className="studio-heading">
               <span className="section-index">03</span>
               <div>
-                <span className="eyebrow">Template studio</span>
+                <span className="eyebrow">Plantillas</span>
                 <h2>Editar mensajes por intento</h2>
               </div>
             </div>
@@ -743,7 +804,7 @@ function App() {
               onClick={() => void saveSettingsChanges()}
               type="button"
             >
-              {isSavingSettings ? 'Guardando templates...' : 'Guardar templates y reglas'}
+              {isSavingSettings ? 'Guardando plantillas...' : 'Guardar plantillas y reglas'}
             </button>
           </article>
         </div>
@@ -751,11 +812,11 @@ function App() {
         <div className="board-column">
           <article className="panel board-stage">
             <div className="board-stage-copy">
-              <span className="eyebrow">Inbox operativo</span>
-              <h2>Todo el avance comercial en una vista central</h2>
+              <span className="eyebrow">Pipeline</span>
+              <h2>La cola comercial siempre visible</h2>
               <p>
-                Revisa clientes activos, identifica el proximo borrador, detecta bloqueos
-                y mueve a eliminacion los que ya completaron su secuencia.
+                Activos, finalizados y pausados quedan ordenados para operar con menos
+                friccion y mas claridad sobre el siguiente paso.
               </p>
             </div>
 
@@ -824,7 +885,7 @@ function App() {
                       <div className="attempt-track">
                         {attemptStatuses.map((status, index) => (
                           <div className={`attempt-node attempt-node-${status}`} key={`${client.id}-${index + 1}`}>
-                            <span>{index + 1}</span>
+                            <span>Intento {index + 1}</span>
                             <strong>{client.contactScheduleTimes[index]}</strong>
                           </div>
                         ))}
@@ -870,7 +931,7 @@ function App() {
 
                       <div className="history-stack">
                         <div className="history-header">
-                          <span className="eyebrow">Activity</span>
+                          <span className="eyebrow">Actividad reciente</span>
                         </div>
 
                         {client.history.length === 0 ? (
@@ -925,22 +986,21 @@ function App() {
                     <article className="panel archive-card" key={client.id}>
                       <div className="archive-top">
                         <div>
-                          <span className="eyebrow">Ready to archive</span>
+                          <div className="identity-row">
+                            <span className="status-pill pill-finished">Finalizado</span>
+                            <span className="meta-pill">{getClientStageLabel(client)}</span>
+                          </div>
                           <h3>{client.name}</h3>
                           <p className="client-subtitle">
                             Flujo completado con {client.sentContacts} de {client.targetContacts}{' '}
                             intentos.
                           </p>
                         </div>
-
-                        <img alt="Hessa Enterprises" className="archive-wordmark" src={logoWordmark} />
                       </div>
 
                       <div className="archive-highlight">
-                        <strong>Ya se finalizo con este cliente</strong>
-                        <span>
-                          Puedes conservarlo como referencia o eliminarlo ahora mismo.
-                        </span>
+                        <strong>Secuencia cerrada correctamente</strong>
+                        <span>Puedes conservar este registro como referencia o archivarlo.</span>
                       </div>
 
                       <div className="meta-grid">

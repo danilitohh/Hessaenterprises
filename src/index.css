@@ -1,28 +1,32 @@
 :root {
-  --bg-strong: #07111d;
-  --bg-deep: #0b1728;
-  --bg-mid: #11243a;
-  --panel-blue: #0b1b2f;
-  --line-soft: rgba(255, 245, 226, 0.1);
-  --gold: #d89d50;
-  --cyan: #54b2c3;
-  --text-strong: #fbf4e6;
-  --text-soft: rgba(236, 228, 214, 0.76);
-  color: var(--text-strong);
+  --canvas-top: #f8f3ec;
+  --canvas-bottom: #efe6d8;
+  --panel-base: rgba(255, 252, 247, 0.78);
+  --line-soft: rgba(43, 50, 60, 0.1);
+  --ink-strong: #1d2733;
+  --ink-soft: #5e6875;
+  --ink-muted: #8b92a0;
+  --navy-strong: #20364b;
+  --navy-soft: #dee8f1;
+  --gold-strong: #9a6a31;
+  --gold-soft: #f4e7d2;
+  --success-strong: #2f6d5d;
+  --success-soft: #e1efe9;
+  --danger-strong: #924c45;
+  --danger-soft: #f6e4e1;
+  color: var(--ink-strong);
   background:
-    radial-gradient(circle at 12% 0%, rgba(84, 178, 195, 0.16), transparent 24%),
-    radial-gradient(circle at 88% 0%, rgba(216, 157, 80, 0.14), transparent 22%),
-    linear-gradient(180deg, #102235 0%, #0b1728 46%, #06101b 100%);
-  font-family:
-    'Avenir Next', 'Segoe UI Variable', 'Trebuchet MS', 'Helvetica Neue',
-    sans-serif;
+    radial-gradient(circle at 0% 0%, rgba(86, 127, 171, 0.12), transparent 22%),
+    radial-gradient(circle at 100% 0%, rgba(185, 138, 74, 0.12), transparent 20%),
+    linear-gradient(180deg, var(--canvas-top) 0%, var(--canvas-bottom) 100%);
+  font-family: 'Avenir Next', 'Optima', 'Segoe UI Variable', 'Trebuchet MS', sans-serif;
   font-synthesis: none;
   font-weight: 400;
   line-height: 1.5;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -32,18 +36,18 @@
 html {
   min-height: 100%;
   background:
-    radial-gradient(circle at 12% 0%, rgba(84, 178, 195, 0.16), transparent 24%),
-    radial-gradient(circle at 88% 0%, rgba(216, 157, 80, 0.14), transparent 22%),
-    linear-gradient(180deg, #102235 0%, #0b1728 46%, #06101b 100%);
+    radial-gradient(circle at 0% 0%, rgba(86, 127, 171, 0.12), transparent 22%),
+    radial-gradient(circle at 100% 0%, rgba(185, 138, 74, 0.12), transparent 20%),
+    linear-gradient(180deg, var(--canvas-top) 0%, var(--canvas-bottom) 100%);
 }
 
 body {
   margin: 0;
   min-height: 100vh;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
-  background-size: 68px 68px;
+    linear-gradient(rgba(29, 39, 51, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(29, 39, 51, 0.03) 1px, transparent 1px);
+  background-size: 64px 64px;
 }
 
 body::before {
@@ -52,19 +56,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at 14% 12%, rgba(216, 157, 80, 0.12), transparent 24%),
-    radial-gradient(circle at 84% 18%, rgba(84, 178, 195, 0.12), transparent 22%);
-}
-
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(120deg, rgba(255, 255, 255, 0.02), transparent 28%),
-    radial-gradient(circle at bottom left, rgba(84, 178, 195, 0.08), transparent 24%);
-  mix-blend-mode: screen;
+    radial-gradient(circle at 12% 16%, rgba(185, 138, 74, 0.08), transparent 24%),
+    radial-gradient(circle at 82% 22%, rgba(86, 127, 171, 0.08), transparent 20%);
 }
 
 #root {
@@ -75,24 +68,23 @@ h1,
 h2,
 h3 {
   margin: 0;
-  color: var(--text-strong);
+  color: var(--ink-strong);
   font-family: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
   font-weight: 700;
-  line-height: 0.98;
+  line-height: 0.96;
 }
 
 h1 {
-  max-width: 12ch;
-  font-size: clamp(2.6rem, 4vw, 4.4rem);
-  letter-spacing: -0.05em;
+  font-size: clamp(2.8rem, 5vw, 5.2rem);
+  letter-spacing: -0.055em;
 }
 
 h2 {
-  font-size: clamp(1.55rem, 1.9vw, 2.05rem);
+  font-size: clamp(1.7rem, 2.1vw, 2.3rem);
 }
 
 h3 {
-  font-size: clamp(1.22rem, 1.45vw, 1.55rem);
+  font-size: clamp(1.2rem, 1.45vw, 1.55rem);
 }
 
 p {
@@ -101,7 +93,8 @@ p {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -111,26 +104,26 @@ code {
   min-height: 32px;
   padding: 0 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 244, 225, 0.08);
-  color: #ffe5b4;
+  background: rgba(244, 231, 210, 0.88);
+  border: 1px solid rgba(154, 106, 49, 0.12);
+  color: var(--gold-strong);
   font-family: 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
 }
 
 .eyebrow {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  color: var(--gold-strong);
   font-size: 0.76rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #efc074;
 }
 
 .eyebrow::before {
   content: '';
   width: 34px;
   height: 1px;
-  background: linear-gradient(90deg, rgba(239, 192, 116, 0.92), transparent);
+  background: linear-gradient(90deg, rgba(154, 106, 49, 0.9), transparent);
 }
