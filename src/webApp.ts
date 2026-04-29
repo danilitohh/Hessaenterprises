@@ -1,15 +1,21 @@
 import type {
   AppOperationResponse,
   AppState,
+  AuthSession,
+  AuthUser,
   ClientInput,
   ClientRecord,
   FollowUpHistoryItem,
+  LoginInput,
+  RegisterInput,
   RuntimeInfo,
   SettingsInput,
   SettingsState,
 } from './types'
 
-const STORAGE_KEY = 'hessa-followup-web'
+const LEGACY_STORAGE_KEY = 'hessa-followup-web'
+const AUTH_STORAGE_KEY = 'hessa-followup-web:auth'
+const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
 const MAX_CONTACTS = 4
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
 const statusPriority = {
@@ -22,6 +28,16 @@ type Database = {
   version: number
   settings: SettingsState
   clients: ClientRecord[]
+}
+
+type StoredUser = AuthUser & {
+  passwordHash: string
+}
+
+type AuthStore = {
+  version: number
+  sessionUserId: string | null
+  users: StoredUser[]
 }
 
 function createDefaultTemplates() {
@@ -84,6 +100,12 @@ const defaultDatabase: Database = Object.freeze({
   clients: [],
 })
 
+const defaultAuthStore: AuthStore = Object.freeze({
+  version: 1,
+  sessionUserId: null,
+  users: [],
+})
+
 function createId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -96,8 +118,16 @@ function cloneDefaultDatabase() {
   return JSON.parse(JSON.stringify(defaultDatabase)) as Database
 }
 
+function cloneDefaultAuthStore() {
+  return JSON.parse(JSON.stringify(defaultAuthStore)) as AuthStore
+}
+
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+}
+
+function toStoredEmail(email: string) {
+  return email.trim().toLowerCase()
 }
 
 function clampTargetContacts(value: unknown) {
@@ -341,9 +371,90 @@ function normalizeDatabase(rawData: unknown): Database {
   return database
 }
 
-function loadDatabase() {
+function normalizeStoredUser(rawUser: unknown): StoredUser | null {
+  const normalized = rawUser && typeof rawUser === 'object' ? rawUser : Object.create(null)
+
+  if (
+    !('id' in normalized) ||
+    typeof normalized.id !== 'string' ||
+    !('name' in normalized) ||
+    typeof normalized.name !== 'string' ||
+    !('email' in normalized) ||
+    typeof normalized.email !== 'string' ||
+    !('createdAt' in normalized) ||
+    typeof normalized.createdAt !== 'string' ||
+    !('passwordHash' in normalized) ||
+    typeof normalized.passwordHash !== 'string'
+  ) {
+    return null
+  }
+
+  return {
+    id: normalized.id,
+    name: normalized.name.trim(),
+    email: toStoredEmail(normalized.email),
+    createdAt: normalized.createdAt,
+    passwordHash: normalized.passwordHash,
+  }
+}
+
+function normalizeAuthStore(rawData: unknown): AuthStore {
+  const authStore = cloneDefaultAuthStore()
+  const normalized = rawData && typeof rawData === 'object' ? rawData : Object.create(null)
+  const normalizedUsers =
+    'users' in normalized && Array.isArray(normalized.users)
+      ? normalized.users
+          .map(normalizeStoredUser)
+          .filter((user: StoredUser | null): user is StoredUser => user !== null)
+      : []
+
+  authStore.version =
+    'version' in normalized && Number.isInteger(normalized.version) && normalized.version > 0
+      ? normalized.version
+      : 1
+  authStore.users = normalizedUsers
+  authStore.sessionUserId =
+    'sessionUserId' in normalized && typeof normalized.sessionUserId === 'string'
+      ? normalized.sessionUserId
+      : null
+
+  if (
+    authStore.sessionUserId &&
+    !authStore.users.some((user) => user.id === authStore.sessionUserId)
+  ) {
+    authStore.sessionUserId = null
+  }
+
+  return authStore
+}
+
+function loadAuthStore() {
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY)
+    const stored = window.localStorage.getItem(AUTH_STORAGE_KEY)
+
+    if (!stored) {
+      return cloneDefaultAuthStore()
+    }
+
+    return normalizeAuthStore(JSON.parse(stored))
+  } catch {
+    return cloneDefaultAuthStore()
+  }
+}
+
+function saveAuthStore(authStore: AuthStore) {
+  const normalized = normalizeAuthStore(authStore)
+  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(normalized))
+  return normalized
+}
+
+function getWorkspaceStorageKey(userId: string) {
+  return `${WORKSPACE_STORAGE_PREFIX}${userId}`
+}
+
+function loadDatabaseByKey(storageKey: string) {
+  try {
+    const stored = window.localStorage.getItem(storageKey)
 
     if (!stored) {
       return cloneDefaultDatabase()
@@ -355,10 +466,82 @@ function loadDatabase() {
   }
 }
 
-function saveDatabase(database: Database) {
+function saveDatabaseByKey(storageKey: string, database: Database) {
   const normalized = normalizeDatabase(database)
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+  window.localStorage.setItem(storageKey, JSON.stringify(normalized))
   return normalized
+}
+
+function loadDatabaseForUser(userId: string) {
+  return loadDatabaseByKey(getWorkspaceStorageKey(userId))
+}
+
+function saveDatabaseForUser(userId: string, database: Database) {
+  return saveDatabaseByKey(getWorkspaceStorageKey(userId), database)
+}
+
+function toPublicUser(user: StoredUser): AuthUser {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    createdAt: user.createdAt,
+  }
+}
+
+function getSessionFromStore(authStore: AuthStore): AuthSession | null {
+  if (!authStore.sessionUserId) {
+    return null
+  }
+
+  const user = authStore.users.find((item) => item.id === authStore.sessionUserId)
+
+  if (!user) {
+    return null
+  }
+
+  return { user: toPublicUser(user) }
+}
+
+function requireSession() {
+  const authStore = loadAuthStore()
+  const session = getSessionFromStore(authStore)
+
+  if (!session) {
+    throw new Error('Please sign in to continue.')
+  }
+
+  return {
+    authStore,
+    session,
+  }
+}
+
+async function hashPassword(password: string) {
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const encoded = new TextEncoder().encode(password)
+    const buffer = await crypto.subtle.digest('SHA-256', encoded)
+    return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+
+  return password
+}
+
+function migrateLegacyWorkspaceToUser(userId: string) {
+  const legacyStored = window.localStorage.getItem(LEGACY_STORAGE_KEY)
+  const targetKey = getWorkspaceStorageKey(userId)
+
+  if (!legacyStored || window.localStorage.getItem(targetKey)) {
+    return
+  }
+
+  try {
+    const legacyDatabase = normalizeDatabase(JSON.parse(legacyStored))
+    window.localStorage.setItem(targetKey, JSON.stringify(legacyDatabase))
+    window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+  } catch {
+    window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+  }
 }
 
 function sortClients(clients: ClientRecord[]) {
@@ -574,8 +757,9 @@ function getRuntimeInfo(): RuntimeInfo {
   }
 }
 
-function getAppStateFromDatabase(database: Database): AppState {
+function getAppStateFromDatabase(database: Database, currentUser: AuthUser): AppState {
   return {
+    currentUser,
     runtimeInfo: getRuntimeInfo(),
     settings: database.settings,
     stats: summarizeClients(database.clients),
@@ -583,9 +767,9 @@ function getAppStateFromDatabase(database: Database): AppState {
   }
 }
 
-function persistDatabase(database: Database) {
+function persistDatabase(userId: string, database: Database) {
   database.clients = sortClients(database.clients)
-  return saveDatabase(database)
+  return saveDatabaseForUser(userId, database)
 }
 
 function mergeSettings(currentSettings: SettingsState, incomingSettings: SettingsInput): SettingsState {
@@ -597,7 +781,9 @@ function mergeSettings(currentSettings: SettingsState, incomingSettings: Setting
     templates: normalizeTemplates(incomingSettings.templates).map((template, index) => ({
       id: template.id,
       title: template.title,
-      subject: incomingSettings.templates[index]?.subject?.trim() || currentSettings.templates[index].subject,
+      subject:
+        incomingSettings.templates[index]?.subject?.trim() ||
+        currentSettings.templates[index].subject,
       body: incomingSettings.templates[index]?.body || currentSettings.templates[index].body,
     })),
     automation: {
@@ -607,7 +793,10 @@ function mergeSettings(currentSettings: SettingsState, incomingSettings: Setting
   }
 }
 
-function selectClientsForProcessing(clients: ClientRecord[], options: { clientId?: string; force?: boolean } = {}) {
+function selectClientsForProcessing(
+  clients: ClientRecord[],
+  options: { clientId?: string; force?: boolean } = {},
+) {
   const now = Date.now()
 
   return sortClients(
@@ -672,34 +861,132 @@ function advanceClientWithDraft(database: Database, client: ClientRecord) {
       database.settings.automation.intervalDays,
     )
   }
-
-  return payload
 }
 
-function buildOperationResponse(database: Database, message: string): AppOperationResponse {
+function buildOperationResponse(
+  database: Database,
+  currentUser: AuthUser,
+  message: string,
+  processed = 1,
+  sent = 1,
+): AppOperationResponse {
   return {
-    ...getAppStateFromDatabase(database),
+    ...getAppStateFromDatabase(database, currentUser),
     result: {
       failed: 0,
       message,
-      processed: 1,
-      sent: 1,
+      processed,
+      sent,
     },
   }
 }
 
 export const webApp = {
+  async getSession() {
+    return getSessionFromStore(loadAuthStore())
+  },
+
+  async register(registerInput: RegisterInput) {
+    const name = registerInput.name.trim()
+    const email = toStoredEmail(registerInput.email)
+    const password = registerInput.password
+
+    if (!name) {
+      throw new Error('Name is required.')
+    }
+
+    if (!isValidEmail(email)) {
+      throw new Error('Please enter a valid email address.')
+    }
+
+    if (password.trim().length < 8) {
+      throw new Error('Password must be at least 8 characters long.')
+    }
+
+    const authStore = loadAuthStore()
+
+    if (authStore.users.some((user) => user.email === email)) {
+      throw new Error('An account with this email already exists.')
+    }
+
+    const createdAt = new Date().toISOString()
+    const newUser: StoredUser = {
+      id: createId(),
+      name,
+      email,
+      createdAt,
+      passwordHash: await hashPassword(password),
+    }
+
+    authStore.users.push(newUser)
+    authStore.sessionUserId = newUser.id
+    saveAuthStore(authStore)
+
+    if (authStore.users.length === 1) {
+      migrateLegacyWorkspaceToUser(newUser.id)
+    }
+
+    return {
+      user: toPublicUser(newUser),
+    }
+  },
+
+  async login(loginInput: LoginInput) {
+    const email = toStoredEmail(loginInput.email)
+    const password = loginInput.password
+
+    if (!isValidEmail(email)) {
+      throw new Error('Please enter a valid email address.')
+    }
+
+    if (!password) {
+      throw new Error('Password is required.')
+    }
+
+    const authStore = loadAuthStore()
+    const user = authStore.users.find((item) => item.email === email)
+
+    if (!user) {
+      throw new Error('No account was found for this email.')
+    }
+
+    const attemptedHash = await hashPassword(password)
+
+    if (attemptedHash !== user.passwordHash) {
+      throw new Error('Incorrect password.')
+    }
+
+    authStore.sessionUserId = user.id
+    saveAuthStore(authStore)
+
+    if (authStore.users.length === 1) {
+      migrateLegacyWorkspaceToUser(user.id)
+    }
+
+    return {
+      user: toPublicUser(user),
+    }
+  },
+
+  async logout() {
+    const authStore = loadAuthStore()
+    authStore.sessionUserId = null
+    saveAuthStore(authStore)
+  },
+
   async getAppState() {
-    return getAppStateFromDatabase(loadDatabase())
+    const { session } = requireSession()
+    return getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user)
   },
 
   async saveSettings(incomingSettings: SettingsInput) {
-    const database = loadDatabase()
+    const { session } = requireSession()
+    const database = loadDatabaseForUser(session.user.id)
     database.settings = mergeSettings(database.settings, incomingSettings)
-    const persisted = persistDatabase(database)
+    const persisted = persistDatabase(session.user.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted),
+      ...getAppStateFromDatabase(persisted, session.user),
       result: {
         failed: 0,
         message: 'Workspace settings saved successfully.',
@@ -710,6 +997,7 @@ export const webApp = {
   },
 
   async createClient(clientInput: ClientInput) {
+    const { session } = requireSession()
     const name = clientInput.name.trim()
     const email = clientInput.email.trim().toLowerCase()
     const company = clientInput.company.trim()
@@ -728,7 +1016,7 @@ export const webApp = {
       normalizeScheduleTime(clientInput.contactScheduleTimes[index], DEFAULT_SCHEDULE_TIMES[index]),
     )
 
-    const database = loadDatabase()
+    const database = loadDatabaseForUser(session.user.id)
     const createdAt = new Date().toISOString()
     const client: ClientRecord = {
       id: createId(),
@@ -759,7 +1047,7 @@ export const webApp = {
     )
 
     database.clients.unshift(client)
-    persistDatabase(database)
+    persistDatabase(session.user.id, database)
 
     const shouldAutoOpen =
       database.settings.automation.autoOpenDraftOnCreate &&
@@ -771,7 +1059,7 @@ export const webApp = {
     }
 
     return {
-      ...getAppStateFromDatabase(loadDatabase()),
+      ...getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user),
       result: {
         failed: 0,
         message: `Client added. First draft scheduled for ${toDateLabel(client.nextContactAt)}.`,
@@ -782,12 +1070,13 @@ export const webApp = {
   },
 
   async processDueFollowUps() {
-    const database = loadDatabase()
+    const { session } = requireSession()
+    const database = loadDatabaseForUser(session.user.id)
     const candidates = selectClientsForProcessing(database.clients)
 
     if (candidates.length === 0) {
       return {
-        ...getAppStateFromDatabase(database),
+        ...getAppStateFromDatabase(database, session.user),
         result: {
           failed: 0,
           message: 'There are no scheduled follow-ups ready to open.',
@@ -804,7 +1093,7 @@ export const webApp = {
     }
 
     advanceClientWithDraft(database, client)
-    const persisted = persistDatabase(database)
+    const persisted = persistDatabase(session.user.id, database)
     const remainingDue = selectClientsForProcessing(persisted.clients).length
     const suffix =
       remainingDue > 0
@@ -813,6 +1102,7 @@ export const webApp = {
 
     return buildOperationResponse(
       persisted,
+      session.user,
       `Opened the next draft for ${client.name}.${suffix}`,
     )
   },
@@ -822,7 +1112,8 @@ export const webApp = {
       throw new Error('A client must be selected before opening a draft.')
     }
 
-    const database = loadDatabase()
+    const { session } = requireSession()
+    const database = loadDatabaseForUser(session.user.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -838,16 +1129,18 @@ export const webApp = {
     }
 
     advanceClientWithDraft(database, client)
-    const persisted = persistDatabase(database)
+    const persisted = persistDatabase(session.user.id, database)
 
     return buildOperationResponse(
       persisted,
+      session.user,
       `Opened touchpoint ${client.sentContacts} for ${client.name}.`,
     )
   },
 
   async updateClientStatus(clientId: string, nextStatus: ClientRecord['status']) {
-    const database = loadDatabase()
+    const { session } = requireSession()
+    const database = loadDatabaseForUser(session.user.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -879,10 +1172,10 @@ export const webApp = {
       client.nextContactAt = null
     }
 
-    const persisted = persistDatabase(database)
+    const persisted = persistDatabase(session.user.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted),
+      ...getAppStateFromDatabase(persisted, session.user),
       result: {
         failed: 0,
         message:
@@ -900,7 +1193,8 @@ export const webApp = {
       throw new Error('A client must be selected before deletion.')
     }
 
-    const database = loadDatabase()
+    const { session } = requireSession()
+    const database = loadDatabaseForUser(session.user.id)
     const clientIndex = database.clients.findIndex((item) => item.id === clientId)
 
     if (clientIndex === -1) {
@@ -908,10 +1202,10 @@ export const webApp = {
     }
 
     database.clients.splice(clientIndex, 1)
-    const persisted = persistDatabase(database)
+    const persisted = persistDatabase(session.user.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted),
+      ...getAppStateFromDatabase(persisted, session.user),
       result: {
         failed: 0,
         message: 'Client deleted successfully.',

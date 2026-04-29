@@ -3,10 +3,13 @@ import logoWordmark from './assets/logo-wordmark.png'
 import type {
   AppOperationResponse,
   AppState,
+  AuthSession,
   ClientInput,
   ClientRecord,
   ClientStatus,
   EmailTemplate,
+  LoginInput,
+  RegisterInput,
   SettingsInput,
   SettingsState,
 } from './types'
@@ -20,6 +23,14 @@ const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 type Notice = {
   tone: 'error' | 'info' | 'success'
   message: string
+}
+
+type AuthMode = 'login' | 'register'
+
+type AuthFormState = {
+  email: string
+  name: string
+  password: string
 }
 
 type SettingsFormState = {
@@ -38,6 +49,14 @@ function createInitialClientForm(): ClientInput {
     notes: '',
     targetContacts: 4,
     contactScheduleTimes: [...DEFAULT_SCHEDULE_TIMES],
+  }
+}
+
+function createInitialAuthForm(): AuthFormState {
+  return {
+    email: '',
+    name: '',
+    password: '',
   }
 }
 
@@ -137,11 +156,15 @@ const templateTokens = [
 ]
 
 function App() {
+  const [session, setSession] = useState<AuthSession | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [clientForm, setClientForm] = useState<ClientInput>(() => createInitialClientForm())
+  const [authForm, setAuthForm] = useState<AuthFormState>(() => createInitialAuthForm())
   const [settingsForm, setSettingsForm] = useState<SettingsFormState | null>(null)
+  const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isSubmittingClient, setIsSubmittingClient] = useState(false)
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [isProcessingQueue, setIsProcessingQueue] = useState(false)
@@ -173,9 +196,17 @@ function App() {
       const nextState = await webApp.getAppState()
       applyAppState(nextState, syncSettings || settingsForm === null)
     } catch (error) {
+      const message = toErrorMessage(error)
+
+      if (message === 'Please sign in to continue.') {
+        setSession(null)
+        setAppState(null)
+        setSettingsForm(null)
+      }
+
       setNotice({
         tone: 'error',
-        message: toErrorMessage(error),
+        message,
       })
     } finally {
       setLoading(false)
@@ -183,7 +214,30 @@ function App() {
   })
 
   useEffect(() => {
+    const boot = async () => {
+      try {
+        const nextSession = await webApp.getSession()
+        setSession(nextSession)
+      } catch (error) {
+        setNotice({
+          tone: 'error',
+          message: toErrorMessage(error),
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void boot()
+  }, [])
+
+  useEffect(() => {
+    if (!session) {
+      return
+    }
+
     const bootId = window.setTimeout(() => {
+      setLoading(true)
       void refreshState(true)
     }, 0)
 
@@ -195,7 +249,7 @@ function App() {
       window.clearTimeout(bootId)
       window.clearInterval(intervalId)
     }
-  }, [])
+  }, [session])
 
   function updateClientSchedule(targetContacts: number) {
     setClientForm((current) => {
@@ -209,6 +263,68 @@ function App() {
         contactScheduleTimes: nextSchedule,
       }
     })
+  }
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setIsAuthenticating(true)
+
+    try {
+      let nextSession: AuthSession
+
+      if (authMode === 'register') {
+        const payload: RegisterInput = {
+          name: authForm.name,
+          email: authForm.email,
+          password: authForm.password,
+        }
+
+        nextSession = await webApp.register(payload)
+        setNotice({
+          tone: 'success',
+          message: 'Account created successfully.',
+        })
+      } else {
+        const payload: LoginInput = {
+          email: authForm.email,
+          password: authForm.password,
+        }
+
+        nextSession = await webApp.login(payload)
+        setNotice({
+          tone: 'success',
+          message: 'Signed in successfully.',
+        })
+      }
+
+      setAuthForm(createInitialAuthForm())
+      setSession(nextSession)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+    } finally {
+      setIsAuthenticating(false)
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await webApp.logout()
+      setSession(null)
+      setAppState(null)
+      setSettingsForm(null)
+      setNotice({
+        tone: 'info',
+        message: 'You have been signed out.',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+    }
   }
 
   async function handleClientSubmit(event: FormEvent<HTMLFormElement>) {
@@ -343,6 +459,135 @@ function App() {
     }
   }
 
+  if (!session) {
+    return (
+      <main className="crm-shell">
+        <section className="auth-layout">
+          <article className="panel home-hero">
+            <div className="home-hero-top">
+              <span className="eyebrow">Hessa Enterprises</span>
+              <span className="stage-chip">Follow-up platform</span>
+            </div>
+
+            <div className="home-hero-brand">
+              <div className="brand-glow"></div>
+              <img alt="Hessa Enterprises" className="brand-wordmark" src={logoWordmark} />
+            </div>
+
+            <div className="home-hero-copy">
+              <span className="brand-caption">Structured outbound follow-up</span>
+              <h1>One clean homepage for every user to sign in and manage outreach.</h1>
+              <p className="lede">
+                Register a new account or sign in to access your own follow-up workspace,
+                client sequences, and email drafts in one streamlined web app.
+              </p>
+            </div>
+
+            <div className="home-feature-list">
+              <div className="home-feature-item">
+                <strong>Per-user workspace</strong>
+                <span>Each account keeps its own client list, settings, and workflow data.</span>
+              </div>
+              <div className="home-feature-item">
+                <strong>Simple sequence control</strong>
+                <span>Schedule outreach, open drafts, and keep the next step visible.</span>
+              </div>
+              <div className="home-feature-item">
+                <strong>Browser-based access</strong>
+                <span>No desktop layer required, just sign in and continue working.</span>
+              </div>
+            </div>
+          </article>
+
+          <article className="panel auth-card">
+            <div className="auth-card-header">
+              <span className="eyebrow">Account access</span>
+              <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+              <p>
+                {authMode === 'login'
+                  ? 'Sign in to open your follow-up workspace.'
+                  : 'Register a new user to start managing outreach from this platform.'}
+              </p>
+            </div>
+
+            <div className="auth-toggle">
+              <button
+                className={`auth-toggle-button ${authMode === 'login' ? 'auth-toggle-button-active' : ''}`}
+                onClick={() => setAuthMode('login')}
+                type="button"
+              >
+                Log in
+              </button>
+              <button
+                className={`auth-toggle-button ${authMode === 'register' ? 'auth-toggle-button-active' : ''}`}
+                onClick={() => setAuthMode('register')}
+                type="button"
+              >
+                Register
+              </button>
+            </div>
+
+            {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
+
+            <form className="stack-form" onSubmit={handleAuthSubmit}>
+              {authMode === 'register' ? (
+                <label className="field">
+                  <span>Full name</span>
+                  <input
+                    onChange={(event) =>
+                      setAuthForm((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="Your name"
+                    required
+                    type="text"
+                    value={authForm.name}
+                  />
+                </label>
+              ) : null}
+
+              <label className="field">
+                <span>Email address</span>
+                <input
+                  onChange={(event) =>
+                    setAuthForm((current) => ({ ...current, email: event.target.value }))
+                  }
+                  placeholder="you@company.com"
+                  required
+                  type="email"
+                  value={authForm.email}
+                />
+              </label>
+
+              <label className="field">
+                <span>Password</span>
+                <input
+                  minLength={8}
+                  onChange={(event) =>
+                    setAuthForm((current) => ({ ...current, password: event.target.value }))
+                  }
+                  placeholder="Minimum 8 characters"
+                  required
+                  type="password"
+                  value={authForm.password}
+                />
+              </label>
+
+              <button className="primary-button full-width" disabled={isAuthenticating} type="submit">
+                {isAuthenticating
+                  ? authMode === 'login'
+                    ? 'Signing in...'
+                    : 'Creating account...'
+                  : authMode === 'login'
+                    ? 'Log in'
+                    : 'Create account'}
+              </button>
+            </form>
+          </article>
+        </section>
+      </main>
+    )
+  }
+
   if (loading || !appState || !settingsForm) {
     return (
       <main className="crm-shell">
@@ -371,11 +616,24 @@ function App() {
 
   return (
     <main className="crm-shell">
+      <header className="workspace-topbar">
+        <div className="workspace-brand">
+          <span className="eyebrow">Hessa Follow Up</span>
+          <p>
+            Signed in as <strong>{appState.currentUser.name}</strong> · {appState.currentUser.email}
+          </p>
+        </div>
+
+        <button className="ghost-button" onClick={() => void handleLogout()} type="button">
+          Log out
+        </button>
+      </header>
+
       <section className="hero-grid">
         <article className="panel brand-stage">
           <div className="brand-stage-header">
             <span className="eyebrow">Hessa Enterprises</span>
-            <span className="stage-chip">Web app</span>
+            <span className="stage-chip">Private workspace</span>
           </div>
 
           <div className="brand-stage-visual">
@@ -387,8 +645,8 @@ function App() {
             <span className="brand-caption">Client follow-up workspace</span>
             <h2>Built for clean, structured outbound follow-up.</h2>
             <p>
-              This page helps your team manage clients, schedule each outreach
-              touchpoint, and open ready-to-send drafts from one organized workspace.
+              Manage clients, schedule each outreach touchpoint, and open ready-to-send
+              drafts from one organized workspace.
             </p>
           </div>
         </article>

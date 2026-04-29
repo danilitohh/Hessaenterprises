@@ -4,6 +4,17 @@ export type RuntimeInfo = {
   storage: 'localStorage'
 }
 
+export type AuthUser = {
+  id: string
+  name: string
+  email: string
+  createdAt: string
+}
+
+export type AuthSession = {
+  user: AuthUser
+}
+
 export type FollowUpStatus = 'prepared' | 'failed'
 export type ClientStatus = 'active' | 'finished' | 'canceled'
 
@@ -67,6 +78,7 @@ export type SettingsState = {
 }
 
 export type AppState = {
+  currentUser: AuthUser
   runtimeInfo: RuntimeInfo
   settings: SettingsState
   stats: DashboardStats
@@ -103,4 +115,15 @@ export type SettingsInput = {
     intervalDays: number
     autoOpenDraftOnCreate: boolean
   }
+}
+
+export type LoginInput = {
+  email: string
+  password: string
+}
+
+export type RegisterInput = {
+  name: string
+  email: string
+  password: string
 }
