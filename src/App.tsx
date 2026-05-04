@@ -185,6 +185,61 @@ function mapSettingsToForm(settings: SettingsState): SettingsFormState {
   }
 }
 
+const dashboardMetrics = [
+  { label: 'Upcoming follow-ups', value: '12' },
+  { label: 'Pending proposals', value: '7' },
+  { label: 'Client appointments', value: '4' },
+  { label: 'Emails to send today', value: '9' },
+]
+
+const proposalStatuses = ['Sent', 'Pending', 'Approved', 'Declined']
+
+const landingFeatures = [
+  {
+    title: 'Email follow-up tracking',
+    description: 'See every next email, due date, and prepared message before a client goes cold.',
+  },
+  {
+    title: 'Appointment management',
+    description: 'Keep reminders visible for walkthroughs, calls, consultations, and site visits.',
+  },
+  {
+    title: 'Proposal pipeline',
+    description: 'Track proposal movement from sent to pending, approved, declined, or ready to revive.',
+  },
+  {
+    title: 'Per-user workspace',
+    description: 'Each account gets its own clients, notes, follow-up sequences, and settings.',
+  },
+  {
+    title: 'Client history',
+    description: 'Keep context, notes, outreach attempts, and next steps in one organized timeline.',
+  },
+  {
+    title: 'Browser-based access',
+    description: 'Open the workspace from the web without a desktop install or complicated setup.',
+  },
+]
+
+const howItWorksSteps = [
+  {
+    title: 'Add your client',
+    description: 'Capture the contact, company, opportunity notes, and the right follow-up cadence.',
+  },
+  {
+    title: 'Schedule the follow-up',
+    description: 'Pick the next email or appointment reminder so the opportunity keeps moving.',
+  },
+  {
+    title: 'Track the proposal',
+    description: 'Mark proposal status and keep pending decisions from disappearing into inbox noise.',
+  },
+  {
+    title: 'Close the opportunity',
+    description: 'Use a clear client history to follow up at the right moment and win more work.',
+  },
+]
+
 const templateTokens = [
   '{{name}}',
   '{{company}}',
@@ -486,6 +541,16 @@ function App() {
     }
   }
 
+  function handleLandingAuthCta(nextMode: AuthMode) {
+    setAuthMode(nextMode)
+    window.setTimeout(() => {
+      document.getElementById('account-access')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }, 0)
+  }
+
   async function handleLogout() {
     try {
       await webApp.logout()
@@ -639,52 +704,193 @@ function App() {
 
   if (!session) {
     return (
-      <main className="crm-shell">
-        <section className="auth-layout">
-          <article className="panel home-hero">
-            <div className="home-hero-top">
-              <span className="eyebrow">Hessa Enterprises</span>
-              <span className="stage-chip">Follow-up platform</span>
+      <main className="crm-shell landing-shell">
+        <section className="landing-hero-grid">
+          <article className="panel landing-hero-panel">
+            <div className="landing-hero-top">
+              <div className="landing-brand-lockup">
+                <img alt="Hessa Enterprises" className="landing-logo" src={logoWordmark} />
+                <span className="eyebrow">Client follow-up workspace</span>
+              </div>
+              <span className="stage-chip">Premium SaaS CRM</span>
             </div>
 
-            <div className="home-hero-brand">
-              <div className="brand-glow"></div>
-              <img alt="Hessa Enterprises" className="brand-wordmark" src={logoWordmark} />
-            </div>
-
-            <div className="home-hero-copy">
-              <span className="brand-caption">Structured outbound follow-up</span>
-              <h1>One clean homepage for every user to sign in and manage outreach.</h1>
+            <div className="landing-hero-copy">
+              <span className="brand-caption">Built for service businesses and sales teams</span>
+              <h1>Keep every client, appointment, and proposal moving forward.</h1>
               <p className="lede">
-                Register a new account or sign in to access your own follow-up workspace,
-                client sequences, and email drafts in one streamlined web app.
+                Manage email follow-ups, appointment reminders, and proposal tracking from one clean
+                workspace. Each user gets their own account to organize clients, schedule next steps,
+                and never lose sight of an opportunity.
               </p>
             </div>
 
-            <div className="home-feature-list">
-              <div className="home-feature-item">
-                <strong>Per-user workspace</strong>
-                <span>Each account keeps its own client list, settings, and workflow data.</span>
-              </div>
-              <div className="home-feature-item">
-                <strong>Simple sequence control</strong>
-                <span>Schedule outreach, open drafts, and keep the next step visible.</span>
-              </div>
-              <div className="home-feature-item">
-                <strong>Browser-based access</strong>
-                <span>No desktop layer required, just sign in and continue working.</span>
-              </div>
+            <div className="landing-hero-actions">
+              <button
+                className="primary-button"
+                onClick={() => handleLandingAuthCta('register')}
+                type="button"
+              >
+                Create your workspace
+              </button>
+              <button
+                className="secondary-button"
+                onClick={() => handleLandingAuthCta('login')}
+                type="button"
+              >
+                Log in
+              </button>
+            </div>
+
+            <div className="landing-audience-strip">
+              <span>Contractors</span>
+              <span>Home services</span>
+              <span>Consultants</span>
+              <span>Sales teams</span>
             </div>
           </article>
 
-          <article className="panel auth-card">
+          <article className="panel dashboard-preview-card" aria-label="Dashboard preview">
+            <div className="preview-topbar">
+              <div>
+                <span className="eyebrow">Workspace pulse</span>
+                <h2>Today&apos;s follow-up board</h2>
+              </div>
+              <span className="stage-chip">Live pipeline</span>
+            </div>
+
+            <div className="preview-metric-grid">
+              {dashboardMetrics.map((metric) => (
+                <div className="preview-metric-card" key={metric.label}>
+                  <strong>{metric.value}</strong>
+                  <span>{metric.label}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="preview-board">
+              <div className="preview-board-header">
+                <span>Opportunity queue</span>
+                <strong>Next steps</strong>
+              </div>
+
+              <div className="preview-row">
+                <div>
+                  <strong>Acme Roofing</strong>
+                  <span>Estimate follow-up email due at 9:00 AM</span>
+                </div>
+                <span className="preview-pill">Email ready</span>
+              </div>
+
+              <div className="preview-row">
+                <div>
+                  <strong>Northside Remodel</strong>
+                  <span>Appointment reminder before site walkthrough</span>
+                </div>
+                <span className="preview-pill preview-pill-gold">Appointment</span>
+              </div>
+
+              <div className="preview-row">
+                <div>
+                  <strong>Valley HVAC</strong>
+                  <span>Proposal waiting on client decision</span>
+                </div>
+                <span className="preview-pill preview-pill-soft">Proposal</span>
+              </div>
+            </div>
+
+            <div className="proposal-status-panel">
+              <span className="preview-label">Proposal status badges</span>
+              <div className="proposal-status-list">
+                {proposalStatuses.map((status) => (
+                  <span
+                    className={`proposal-status proposal-status-${status.toLowerCase()}`}
+                    key={status}
+                  >
+                    {status}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section className="landing-content-grid">
+          <div className="landing-main-flow">
+            <section className="landing-section">
+              <div className="landing-section-heading">
+                <span className="eyebrow">What you can manage</span>
+                <h2>A cleaner operating rhythm for every client relationship.</h2>
+                <p>
+                  Replace scattered reminders, forgotten proposal threads, and manual inbox hunting
+                  with one focused workspace for client follow-up.
+                </p>
+              </div>
+
+              <div className="landing-feature-grid">
+                {landingFeatures.map((feature) => (
+                  <article className="home-feature-item landing-feature-card" key={feature.title}>
+                    <span className="feature-card-mark"></span>
+                    <strong>{feature.title}</strong>
+                    <span>{feature.description}</span>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel how-it-works-panel">
+              <div className="landing-section-heading">
+                <span className="eyebrow">How it works</span>
+                <h2>Move from new lead to closed opportunity without losing the thread.</h2>
+              </div>
+
+              <div className="how-step-grid">
+                {howItWorksSteps.map((step, index) => (
+                  <article className="how-step-card" key={step.title}>
+                    <span>{String(index + 1).padStart(2, '0')}</span>
+                    <strong>{step.title}</strong>
+                    <p>{step.description}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel investment-panel">
+              <div className="investment-copy">
+                <span className="eyebrow">Why invest in this platform?</span>
+                <h2>Missed follow-ups and forgotten proposals can become lost revenue.</h2>
+                <p>
+                  Every unanswered proposal, late appointment reminder, and buried client note adds
+                  friction to the sale. Hessa gives teams a calm command center for the next action,
+                  so opportunities keep progressing instead of quietly slipping away.
+                </p>
+              </div>
+
+              <div className="investment-points">
+                <div>
+                  <strong>Protect revenue</strong>
+                  <span>Keep high-value prospects from going cold after the first conversation.</span>
+                </div>
+                <div>
+                  <strong>Build trust</strong>
+                  <span>Show up on time with reminders, context, and consistent communication.</span>
+                </div>
+                <div>
+                  <strong>Stay focused</strong>
+                  <span>Know exactly which client, proposal, or appointment needs attention today.</span>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <article className="panel auth-card landing-auth-card" id="account-access">
             <div className="auth-card-header">
               <span className="eyebrow">Account access</span>
-              <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+              <h2>{authMode === 'login' ? 'Welcome back' : 'Create your workspace'}</h2>
               <p>
                 {authMode === 'login'
-                  ? 'Sign in to open your follow-up workspace.'
-                  : 'Register a new user to start managing outreach from this platform.'}
+                  ? 'Sign in to open your client follow-up command center.'
+                  : 'Register a new account to organize clients, proposals, appointments, and next steps.'}
               </p>
             </div>
 
