@@ -42,12 +42,13 @@ Deno.serve(async (req) => {
     return optionsResponse
   }
 
-  const supabase = createAdminClient()
+  let supabase: ReturnType<typeof createAdminClient> | null = null
   let userId: string | null = null
   let connectionId: string | null = null
   let payload: ReturnType<typeof assertSendRequest> | null = null
 
   try {
+    supabase = createAdminClient()
     const user = await getAuthenticatedUser(req)
     userId = user.id
     payload = assertSendRequest((await req.json()) as SendRequest)
@@ -101,7 +102,7 @@ Deno.serve(async (req) => {
       sent: true,
     })
   } catch (error) {
-    if (userId && payload) {
+    if (supabase && userId && payload) {
       await supabase.from('gmail_send_logs').insert({
         client_name: payload.clientName,
         contact_number: payload.contactNumber,
@@ -118,6 +119,7 @@ Deno.serve(async (req) => {
     return jsonResponse(
       {
         error: error instanceof Error ? error.message : 'Unable to send Gmail follow-up.',
+        reason: 'gmail_send_failed',
         sent: false,
       },
       { status: 500 },

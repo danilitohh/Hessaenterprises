@@ -75,6 +75,7 @@ const supabaseConfig = createSupabaseConfig()
 
 export const supabaseConfigError = supabaseConfig.error
 export const isSupabaseConfigured = !supabaseConfigError
+export const supabaseFunctionBaseUrl = `${LOCKED_SUPABASE_URL}/functions/v1`
 
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseConfig.url, supabaseConfig.anonKey, {

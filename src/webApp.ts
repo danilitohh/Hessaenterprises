@@ -16,7 +16,7 @@ import type {
   SettingsState,
 } from './types'
 import type { User } from '@supabase/supabase-js'
-import { getSupabaseClient } from './supabaseClient'
+import { getSupabaseClient, supabaseFunctionBaseUrl } from './supabaseClient'
 
 const LEGACY_STORAGE_KEY = 'hessa-followup-web'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
@@ -44,6 +44,7 @@ type EmailDeliveryResult = {
 }
 
 type GmailSendFunctionResponse = {
+  error?: string
   fromEmail?: string
   message?: string
   messageId?: string
@@ -680,22 +681,37 @@ async function sendWithConnectedGmail(
   },
 ): Promise<EmailDeliveryResult> {
   const supabase = getSupabaseClient()
-  const { data, error } = await supabase.functions.invoke<GmailSendFunctionResponse>(
-    'gmail-send-followup',
-    {
-      body: {
-        body,
-        clientName: metadata.clientName,
-        contactNumber: metadata.contactNumber,
-        scheduledFor: metadata.scheduledFor,
-        subject,
-        to: recipient,
-      },
-    },
-  )
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
 
-  if (error) {
-    throw new Error(error.message)
+  if (sessionError || !accessToken) {
+    throw new Error(sessionError?.message ?? 'A Supabase session is required to send with Gmail.')
+  }
+
+  const response = await fetch(`${supabaseFunctionBaseUrl}/gmail-send-followup`, {
+    body: JSON.stringify({
+      body,
+      clientName: metadata.clientName,
+      contactNumber: metadata.contactNumber,
+      scheduledFor: metadata.scheduledFor,
+      subject,
+      to: recipient,
+    }),
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+  })
+  const data = (await response.json().catch(() => null)) as GmailSendFunctionResponse | null
+
+  if (!response.ok) {
+    throw new Error(
+      data?.message ||
+        data?.reason ||
+        (typeof data?.error === 'string' ? data.error : null) ||
+        `Gmail send failed with status ${response.status}.`,
+    )
   }
 
   if (!data?.sent) {
