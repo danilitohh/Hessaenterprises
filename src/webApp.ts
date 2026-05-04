@@ -10,6 +10,8 @@ import type {
   LoginInput,
   PasswordResetInput,
   PasswordUpdateInput,
+  ProposalInput,
+  ProposalRecord,
   RegisterInput,
   RuntimeInfo,
   SettingsInput,
@@ -32,6 +34,7 @@ type Database = {
   version: number
   settings: SettingsState
   clients: ClientRecord[]
+  proposals: ProposalRecord[]
 }
 
 type EmailDeliveryOptions = {
@@ -110,6 +113,7 @@ const defaultDatabase: Database = Object.freeze({
     },
   },
   clients: [],
+  proposals: [],
 })
 
 function createId() {
@@ -315,6 +319,108 @@ function normalizeClient(rawClient: unknown): ClientRecord {
   }
 }
 
+function normalizeProposalStatus(value: unknown): ProposalRecord['status'] {
+  if (value === 'approved' || value === 'declined' || value === 'pending') {
+    return value
+  }
+
+  return 'sent'
+}
+
+function normalizeProposalValue(value: unknown) {
+  const numericValue = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numericValue) && numericValue >= 0 ? numericValue : 0
+}
+
+function normalizeProposal(rawProposal: unknown): ProposalRecord {
+  const normalized =
+    rawProposal && typeof rawProposal === 'object' ? rawProposal : Object.create(null)
+  const targetFollowUps =
+    'targetFollowUps' in normalized
+      ? clampTargetContacts(normalized.targetFollowUps)
+      : MAX_CONTACTS
+  const sentFollowUps =
+    'sentFollowUps' in normalized &&
+    Number.isInteger(normalized.sentFollowUps) &&
+    normalized.sentFollowUps >= 0
+      ? Math.min(normalized.sentFollowUps, targetFollowUps)
+      : 0
+  const scheduleSource =
+    'followUpScheduleTimes' in normalized && Array.isArray(normalized.followUpScheduleTimes)
+      ? normalized.followUpScheduleTimes
+      : DEFAULT_SCHEDULE_TIMES
+  const followUpScheduleTimes = Array.from({ length: targetFollowUps }, (_, index) =>
+    normalizeScheduleTime(scheduleSource[index], DEFAULT_SCHEDULE_TIMES[index]),
+  )
+  const status = normalizeProposalStatus('status' in normalized ? normalized.status : 'sent')
+  const isClosed = status === 'approved' || status === 'declined'
+  const now = new Date().toISOString()
+
+  return {
+    id: ('id' in normalized && typeof normalized.id === 'string' && normalized.id) || createId(),
+    clientName:
+      ('clientName' in normalized &&
+        typeof normalized.clientName === 'string' &&
+        normalized.clientName) ||
+      '',
+    email:
+      ('email' in normalized && typeof normalized.email === 'string' && normalized.email) || '',
+    company:
+      ('company' in normalized && typeof normalized.company === 'string' && normalized.company) ||
+      '',
+    projectName:
+      ('projectName' in normalized &&
+        typeof normalized.projectName === 'string' &&
+        normalized.projectName) ||
+      '',
+    proposalValue: normalizeProposalValue(
+      'proposalValue' in normalized ? normalized.proposalValue : 0,
+    ),
+    notes: ('notes' in normalized && typeof normalized.notes === 'string' && normalized.notes) || '',
+    status,
+    sentAt:
+      ('sentAt' in normalized && typeof normalized.sentAt === 'string' && normalized.sentAt) ||
+      now,
+    createdAt:
+      ('createdAt' in normalized &&
+        typeof normalized.createdAt === 'string' &&
+        normalized.createdAt) ||
+      now,
+    updatedAt:
+      ('updatedAt' in normalized &&
+        typeof normalized.updatedAt === 'string' &&
+        normalized.updatedAt) ||
+      now,
+    approvedAt:
+      ('approvedAt' in normalized && typeof normalized.approvedAt === 'string'
+        ? normalized.approvedAt
+        : null) || null,
+    declinedAt:
+      ('declinedAt' in normalized && typeof normalized.declinedAt === 'string'
+        ? normalized.declinedAt
+        : null) || null,
+    nextFollowUpAt:
+      !isClosed &&
+      sentFollowUps < targetFollowUps &&
+      'nextFollowUpAt' in normalized &&
+      typeof normalized.nextFollowUpAt === 'string'
+        ? normalized.nextFollowUpAt
+        : null,
+    lastFollowUpAt:
+      ('lastFollowUpAt' in normalized && typeof normalized.lastFollowUpAt === 'string'
+        ? normalized.lastFollowUpAt
+        : null) || null,
+    lastError:
+      ('lastError' in normalized && typeof normalized.lastError === 'string'
+        ? normalized.lastError
+        : null) || null,
+    sentFollowUps,
+    targetFollowUps,
+    followUpScheduleTimes,
+    history: normalizeHistory('history' in normalized ? normalized.history : []),
+  }
+}
+
 function normalizeDatabase(rawData: unknown): Database {
   const database = cloneDefaultDatabase()
   const normalized = rawData && typeof rawData === 'object' ? rawData : Object.create(null)
@@ -368,6 +474,11 @@ function normalizeDatabase(rawData: unknown): Database {
   database.clients =
     'clients' in normalized && Array.isArray(normalized.clients)
       ? normalized.clients.map(normalizeClient)
+      : []
+
+  database.proposals =
+    'proposals' in normalized && Array.isArray(normalized.proposals)
+      ? normalized.proposals.map(normalizeProposal)
       : []
 
   return database
@@ -506,6 +617,40 @@ function sortClients(clients: ClientRecord[]) {
   })
 }
 
+function sortProposals(proposals: ProposalRecord[]) {
+  const statusPriority = {
+    sent: 0,
+    pending: 1,
+    approved: 2,
+    declined: 3,
+  } as const
+
+  return [...proposals].sort((left, right) => {
+    const leftStatus = statusPriority[left.status] ?? 99
+    const rightStatus = statusPriority[right.status] ?? 99
+
+    if (leftStatus !== rightStatus) {
+      return leftStatus - rightStatus
+    }
+
+    if (left.nextFollowUpAt || right.nextFollowUpAt) {
+      const nextDifference = compareIsoDates(left.nextFollowUpAt, right.nextFollowUpAt)
+
+      if (nextDifference !== 0) {
+        return nextDifference
+      }
+    }
+
+    return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+  })
+}
+
+function compareIsoDates(firstDate: string | null, secondDate: string | null) {
+  const first = firstDate ? new Date(firstDate).getTime() : Number.POSITIVE_INFINITY
+  const second = secondDate ? new Date(secondDate).getTime() : Number.POSITIVE_INFINITY
+  return first - second
+}
+
 function summarizeClients(clients: ClientRecord[]) {
   const now = Date.now()
 
@@ -577,6 +722,13 @@ function getScheduleTime(client: ClientRecord, contactNumber: number) {
   )
 }
 
+function getProposalScheduleTime(proposal: ProposalRecord, followUpNumber: number) {
+  return normalizeScheduleTime(
+    proposal.followUpScheduleTimes[followUpNumber - 1],
+    DEFAULT_SCHEDULE_TIMES[followUpNumber - 1] ?? '09:00',
+  )
+}
+
 function getNextScheduledAt(
   client: ClientRecord,
   referenceIso: string,
@@ -585,6 +737,22 @@ function getNextScheduledAt(
   mode: 'follow-up' | 'initial' | 'resume' = 'follow-up',
 ) {
   const timeValue = getScheduleTime(client, contactNumber)
+
+  if (mode === 'initial' || mode === 'resume') {
+    return scheduleSameDayOrImmediate(referenceIso, timeValue)
+  }
+
+  return scheduleFollowUp(referenceIso, timeValue, intervalDays)
+}
+
+function getNextProposalScheduledAt(
+  proposal: ProposalRecord,
+  referenceIso: string,
+  followUpNumber: number,
+  intervalDays: number,
+  mode: 'follow-up' | 'initial' | 'resume' = 'follow-up',
+) {
+  const timeValue = getProposalScheduleTime(proposal, followUpNumber)
 
   if (mode === 'initial' || mode === 'resume') {
     return scheduleSameDayOrImmediate(referenceIso, timeValue)
@@ -654,6 +822,47 @@ function buildEmailPayload(
     subject,
     body,
     preview: body.split('\n').find((line) => line.trim())?.trim() ?? '',
+  }
+}
+
+function buildProposalEmailPayload(
+  proposal: ProposalRecord,
+  settings: SettingsState,
+  followUpNumber: number,
+) {
+  const fromName = settings.sender.fromName || 'Hessa Enterprises'
+  const projectName = proposal.projectName || 'your proposal'
+  const proposalValue =
+    proposal.proposalValue > 0
+      ? new Intl.NumberFormat('en-US', {
+          currency: 'USD',
+          maximumFractionDigits: 0,
+          style: 'currency',
+        }).format(proposal.proposalValue)
+      : ''
+  const subject = `Following up on ${projectName}`
+  const valueLine = proposalValue ? `The proposal value is ${proposalValue}.` : ''
+  const body = [
+    `Hi ${proposal.clientName},`,
+    '',
+    `I wanted to follow up on the proposal we sent for ${projectName}.`,
+    ...(valueLine ? [valueLine] : []),
+    'Do you have any questions, or is there anything you need from us to keep this moving forward?',
+    '',
+    'If it is helpful, reply with the best next step and we will take it from there.',
+    '',
+    'Best,',
+    fromName,
+  ].join('\n')
+
+  return {
+    subject:
+      followUpNumber > 1
+        ? `${subject} - follow-up ${followUpNumber}`
+        : subject,
+    body,
+    preview: body.split('\n').find((line) => line.trim())?.trim() ?? '',
+    value: proposalValue,
   }
 }
 
@@ -775,11 +984,13 @@ function getAppStateFromDatabase(database: Database, currentUser: AuthUser): App
     settings: database.settings,
     stats: summarizeClients(database.clients),
     clients: sortClients(database.clients),
+    proposals: sortProposals(database.proposals),
   }
 }
 
 function persistDatabase(userId: string, database: Database) {
   database.clients = sortClients(database.clients)
+  database.proposals = sortProposals(database.proposals)
   return saveDatabaseForUser(userId, database)
 }
 
@@ -837,6 +1048,39 @@ function selectClientsForProcessing(
   )
 }
 
+function selectProposalsForProcessing(
+  proposals: ProposalRecord[],
+  options: { force?: boolean; proposalId?: string } = {},
+) {
+  const now = Date.now()
+
+  return sortProposals(
+    proposals.filter((proposal) => {
+      if (proposal.status === 'approved' || proposal.status === 'declined') {
+        return false
+      }
+
+      if (proposal.sentFollowUps >= proposal.targetFollowUps) {
+        return false
+      }
+
+      if (options.proposalId && proposal.id !== options.proposalId) {
+        return false
+      }
+
+      if (!proposal.nextFollowUpAt) {
+        return Boolean(options.force)
+      }
+
+      if (options.force) {
+        return true
+      }
+
+      return new Date(proposal.nextFollowUpAt).getTime() <= now
+    }),
+  )
+}
+
 async function advanceClientWithDraft(
   database: Database,
   client: ClientRecord,
@@ -877,6 +1121,56 @@ async function advanceClientWithDraft(
       client,
       preparedAt,
       contactNumber + 1,
+      database.settings.automation.intervalDays,
+    )
+  }
+
+  return delivery
+}
+
+async function advanceProposalWithDraft(
+  database: Database,
+  proposal: ProposalRecord,
+  options: EmailDeliveryOptions = {},
+) {
+  const followUpNumber = proposal.sentFollowUps + 1
+  const scheduledFor = proposal.nextFollowUpAt ?? new Date().toISOString()
+  const payload = buildProposalEmailPayload(
+    proposal,
+    database.settings,
+    followUpNumber,
+  )
+  const delivery = await deliverFollowUpEmail(proposal.email, payload.subject, payload.body, {
+    clientName: proposal.clientName,
+    contactNumber: followUpNumber,
+    preferGmail: options.preferGmail,
+    scheduledFor,
+  })
+
+  const preparedAt = new Date().toISOString()
+  proposal.sentFollowUps = followUpNumber
+  proposal.lastFollowUpAt = preparedAt
+  proposal.lastError = null
+  proposal.updatedAt = preparedAt
+  proposal.status = proposal.status === 'sent' ? 'pending' : proposal.status
+  proposal.history.unshift({
+    id: createId(),
+    contactNumber: followUpNumber,
+    status: 'prepared',
+    scheduledFor,
+    happenedAt: preparedAt,
+    subject: payload.subject,
+    preview: delivery.method === 'gmail' ? delivery.detail : payload.preview,
+    error: null,
+  })
+
+  if (proposal.sentFollowUps >= proposal.targetFollowUps) {
+    proposal.nextFollowUpAt = null
+  } else {
+    proposal.nextFollowUpAt = getNextProposalScheduledAt(
+      proposal,
+      preparedAt,
+      followUpNumber + 1,
       database.settings.automation.intervalDays,
     )
   }
@@ -1153,6 +1447,109 @@ export const webApp = {
     }
   },
 
+  async createProposal(proposalInput: ProposalInput, options: EmailDeliveryOptions = {}) {
+    const { session } = await requireSession()
+    const clientName = proposalInput.clientName.trim()
+    const email = proposalInput.email.trim().toLowerCase()
+    const company = proposalInput.company.trim()
+    const projectName = proposalInput.projectName.trim()
+    const notes = proposalInput.notes.trim()
+    const proposalValue = Math.max(0, Number(proposalInput.proposalValue) || 0)
+    const targetFollowUps = clampTargetContacts(proposalInput.targetFollowUps)
+    const sentAt = new Date(proposalInput.sentAt)
+    const nextFollowUpAt = new Date(proposalInput.nextFollowUpAt)
+    const status = normalizeProposalStatus(proposalInput.status)
+    const isClosed = status === 'approved' || status === 'declined'
+
+    if (!clientName) {
+      throw new Error('Client name is required for the proposal.')
+    }
+
+    if (!isValidEmail(email)) {
+      throw new Error('Please enter a valid proposal contact email.')
+    }
+
+    if (!projectName) {
+      throw new Error('Project name is required for the proposal.')
+    }
+
+    if (Number.isNaN(sentAt.getTime())) {
+      throw new Error('Proposal sent date is invalid.')
+    }
+
+    if (!isClosed && Number.isNaN(nextFollowUpAt.getTime())) {
+      throw new Error('Next proposal follow-up date is invalid.')
+    }
+
+    const followUpScheduleTimes = Array.from({ length: targetFollowUps }, (_, index) =>
+      normalizeScheduleTime(
+        proposalInput.followUpScheduleTimes[index],
+        DEFAULT_SCHEDULE_TIMES[index],
+      ),
+    )
+
+    const database = loadDatabaseForUser(session.user.id)
+    const createdAt = new Date().toISOString()
+    const proposal: ProposalRecord = {
+      id: createId(),
+      clientName,
+      email,
+      company,
+      projectName,
+      proposalValue,
+      notes,
+      status,
+      sentAt: sentAt.toISOString(),
+      createdAt,
+      updatedAt: createdAt,
+      approvedAt: status === 'approved' ? createdAt : null,
+      declinedAt: status === 'declined' ? createdAt : null,
+      nextFollowUpAt: isClosed ? null : nextFollowUpAt.toISOString(),
+      lastFollowUpAt: null,
+      lastError: null,
+      sentFollowUps: 0,
+      targetFollowUps,
+      followUpScheduleTimes,
+      history: [],
+    }
+
+    if (!proposal.nextFollowUpAt && !isClosed) {
+      proposal.nextFollowUpAt = getNextProposalScheduledAt(
+        proposal,
+        createdAt,
+        1,
+        database.settings.automation.intervalDays,
+        'initial',
+      )
+    }
+
+    database.proposals.unshift(proposal)
+    persistDatabase(session.user.id, database)
+
+    const shouldAutoOpen =
+      database.settings.automation.autoOpenDraftOnCreate &&
+      proposal.nextFollowUpAt !== null &&
+      new Date(proposal.nextFollowUpAt).getTime() <= Date.now()
+
+    if (shouldAutoOpen) {
+      return this.sendProposalFollowUp(proposal.id, options)
+    }
+
+    return {
+      ...getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user),
+      result: {
+        failed: 0,
+        message: isClosed
+          ? 'Proposal added to the pipeline.'
+          : `Proposal added. Next follow-up scheduled for ${
+              proposal.nextFollowUpAt ? toDateLabel(proposal.nextFollowUpAt) : 'the next available time'
+            }.`,
+        processed: 0,
+        sent: 0,
+      },
+    }
+  },
+
   async processDueFollowUps(options: EmailDeliveryOptions = {}) {
     const { session } = await requireSession()
     const database = loadDatabaseForUser(session.user.id)
@@ -1191,6 +1588,42 @@ export const webApp = {
     )
   },
 
+  async processDueProposalFollowUps(options: EmailDeliveryOptions = {}) {
+    const { session } = await requireSession()
+    const database = loadDatabaseForUser(session.user.id)
+    const candidates = selectProposalsForProcessing(database.proposals)
+
+    if (candidates.length === 0) {
+      return {
+        ...getAppStateFromDatabase(database, session.user),
+        result: {
+          failed: 0,
+          message: 'There are no proposal follow-ups ready to send.',
+          processed: 0,
+          sent: 0,
+        },
+      }
+    }
+
+    const proposal = database.proposals.find((item) => item.id === candidates[0].id)
+
+    if (!proposal) {
+      throw new Error('The next proposal in the queue could not be found.')
+    }
+
+    const delivery = await advanceProposalWithDraft(database, proposal, options)
+    const persisted = persistDatabase(session.user.id, database)
+    const remainingDue = selectProposalsForProcessing(persisted.proposals).length
+    const suffix =
+      remainingDue > 0 ? ` ${remainingDue} more proposal follow-ups are still due.` : ''
+
+    return buildOperationResponse(
+      persisted,
+      session.user,
+      `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} the next proposal follow-up for ${proposal.clientName}.${suffix}`,
+    )
+  },
+
   async sendClientFollowUp(clientId: string, options: EmailDeliveryOptions = {}) {
     if (!clientId) {
       throw new Error('A client must be selected before opening a draft.')
@@ -1219,6 +1652,37 @@ export const webApp = {
       persisted,
       session.user,
       `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} touchpoint ${client.sentContacts} for ${client.name}.`,
+    )
+  },
+
+  async sendProposalFollowUp(proposalId: string, options: EmailDeliveryOptions = {}) {
+    if (!proposalId) {
+      throw new Error('A proposal must be selected before opening a draft.')
+    }
+
+    const { session } = await requireSession()
+    const database = loadDatabaseForUser(session.user.id)
+    const proposal = database.proposals.find((item) => item.id === proposalId)
+
+    if (!proposal) {
+      throw new Error('The selected proposal could not be found.')
+    }
+
+    if (proposal.status === 'approved' || proposal.status === 'declined') {
+      throw new Error('Closed proposals cannot send follow-up emails.')
+    }
+
+    if (proposal.sentFollowUps >= proposal.targetFollowUps) {
+      throw new Error('This proposal has already completed the full follow-up sequence.')
+    }
+
+    const delivery = await advanceProposalWithDraft(database, proposal, options)
+    const persisted = persistDatabase(session.user.id, database)
+
+    return buildOperationResponse(
+      persisted,
+      session.user,
+      `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} proposal follow-up ${proposal.sentFollowUps} for ${proposal.clientName}.`,
     )
   },
 
@@ -1272,6 +1736,57 @@ export const webApp = {
     }
   },
 
+  async updateProposalStatus(proposalId: string, nextStatus: ProposalRecord['status']) {
+    const { session } = await requireSession()
+    const database = loadDatabaseForUser(session.user.id)
+    const proposal = database.proposals.find((item) => item.id === proposalId)
+
+    if (!proposal) {
+      throw new Error('The selected proposal could not be found.')
+    }
+
+    const normalizedStatus = normalizeProposalStatus(nextStatus)
+    const now = new Date().toISOString()
+    proposal.status = normalizedStatus
+    proposal.updatedAt = now
+    proposal.lastError = null
+
+    if (normalizedStatus === 'approved') {
+      proposal.approvedAt = now
+      proposal.declinedAt = null
+      proposal.nextFollowUpAt = null
+    } else if (normalizedStatus === 'declined') {
+      proposal.declinedAt = now
+      proposal.approvedAt = null
+      proposal.nextFollowUpAt = null
+    } else {
+      proposal.approvedAt = null
+      proposal.declinedAt = null
+
+      if (proposal.sentFollowUps < proposal.targetFollowUps && !proposal.nextFollowUpAt) {
+        proposal.nextFollowUpAt = getNextProposalScheduledAt(
+          proposal,
+          now,
+          proposal.sentFollowUps + 1,
+          database.settings.automation.intervalDays,
+          'resume',
+        )
+      }
+    }
+
+    const persisted = persistDatabase(session.user.id, database)
+
+    return {
+      ...getAppStateFromDatabase(persisted, session.user),
+      result: {
+        failed: 0,
+        message: `Proposal marked ${normalizedStatus}.`,
+        processed: 0,
+        sent: 0,
+      },
+    }
+  },
+
   async deleteClient(clientId: string) {
     if (!clientId) {
       throw new Error('A client must be selected before deletion.')
@@ -1293,6 +1808,33 @@ export const webApp = {
       result: {
         failed: 0,
         message: 'Client deleted successfully.',
+        processed: 0,
+        sent: 0,
+      },
+    }
+  },
+
+  async deleteProposal(proposalId: string) {
+    if (!proposalId) {
+      throw new Error('A proposal must be selected before deletion.')
+    }
+
+    const { session } = await requireSession()
+    const database = loadDatabaseForUser(session.user.id)
+    const proposalIndex = database.proposals.findIndex((item) => item.id === proposalId)
+
+    if (proposalIndex === -1) {
+      throw new Error('The selected proposal could not be found.')
+    }
+
+    database.proposals.splice(proposalIndex, 1)
+    const persisted = persistDatabase(session.user.id, database)
+
+    return {
+      ...getAppStateFromDatabase(persisted, session.user),
+      result: {
+        failed: 0,
+        message: 'Proposal deleted successfully.',
         processed: 0,
         sent: 0,
       },

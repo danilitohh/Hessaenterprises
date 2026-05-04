@@ -17,6 +17,9 @@ import type {
   LoginInput,
   PasswordResetInput,
   PasswordUpdateInput,
+  ProposalInput,
+  ProposalRecord,
+  ProposalStatus,
   RegisterInput,
   SettingsInput,
   SettingsState,
@@ -91,6 +94,21 @@ type SettingsFormState = {
   templates: EmailTemplate[]
 }
 
+type ProposalFormState = {
+  clientName: string
+  company: string
+  email: string
+  followUpScheduleTimes: string[]
+  nextFollowUpDate: string
+  nextFollowUpTime: string
+  notes: string
+  projectName: string
+  proposalValue: string
+  sentDate: string
+  status: ProposalStatus
+  targetFollowUps: number
+}
+
 function createInitialClientForm(): ClientInput {
   return {
     company: '',
@@ -99,6 +117,29 @@ function createInitialClientForm(): ClientInput {
     notes: '',
     targetContacts: 4,
     contactScheduleTimes: [...DEFAULT_SCHEDULE_TIMES],
+  }
+}
+
+function toDateInputValue(date: Date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function createInitialProposalForm(): ProposalFormState {
+  const today = toDateInputValue(new Date())
+
+  return {
+    clientName: '',
+    company: '',
+    email: '',
+    followUpScheduleTimes: [...DEFAULT_SCHEDULE_TIMES],
+    nextFollowUpDate: today,
+    nextFollowUpTime: '09:00',
+    notes: '',
+    projectName: '',
+    proposalValue: '',
+    sentDate: today,
+    status: 'sent',
+    targetFollowUps: 4,
   }
 }
 
@@ -208,6 +249,13 @@ function formatDateTime(isoDate: string | null) {
   }).format(new Date(isoDate))
 }
 
+function combineDateAndTime(dateValue: string, timeValue = '09:00') {
+  const [hours, minutes] = timeValue.split(':').map(Number)
+  const date = new Date(`${dateValue}T00:00:00`)
+  date.setHours(Number.isFinite(hours) ? hours : 9, Number.isFinite(minutes) ? minutes : 0, 0, 0)
+  return date.toISOString()
+}
+
 function formatRelativeDue(isoDate: string | null) {
   if (!isoDate) {
     return 'Not scheduled'
@@ -243,6 +291,58 @@ function getClientStatusLabel(status: ClientStatus) {
 
 function getClientStageLabel(client: ClientRecord) {
   return `${client.sentContacts}/${client.targetContacts} touchpoints completed`
+}
+
+function getProposalStatusLabel(status: ProposalStatus) {
+  if (status === 'approved') {
+    return 'Approved'
+  }
+
+  if (status === 'declined') {
+    return 'Declined'
+  }
+
+  if (status === 'pending') {
+    return 'Pending'
+  }
+
+  return 'Sent'
+}
+
+function getProposalPriority(proposal: ProposalRecord): DashboardPriority {
+  if (proposal.lastError || isOverdue(proposal.nextFollowUpAt)) {
+    return 'High'
+  }
+
+  if (isDueToday(proposal.nextFollowUpAt) || proposal.sentFollowUps >= proposal.targetFollowUps - 1) {
+    return 'Medium'
+  }
+
+  return 'Low'
+}
+
+function getProposalStageLabel(proposal: ProposalRecord) {
+  return `${proposal.sentFollowUps}/${proposal.targetFollowUps} proposal follow-ups sent`
+}
+
+function createProposalAttemptStatuses(proposal: ProposalRecord) {
+  return Array.from({ length: proposal.targetFollowUps }, (_, index) => {
+    const followUpNumber = index + 1
+
+    if (followUpNumber <= proposal.sentFollowUps) {
+      return 'done'
+    }
+
+    if (proposal.status === 'approved' || proposal.status === 'declined') {
+      return 'stopped'
+    }
+
+    if (followUpNumber === proposal.sentFollowUps + 1) {
+      return 'current'
+    }
+
+    return 'upcoming'
+  })
 }
 
 function createAttemptStatuses(client: ClientRecord) {
@@ -405,6 +505,22 @@ function isOverdue(isoDate: string | null) {
   return new Date(isoDate) < getStartOfToday()
 }
 
+function isOpenProposal(proposal: ProposalRecord) {
+  return proposal.status !== 'approved' && proposal.status !== 'declined'
+}
+
+function isProposalFollowUpDue(proposal: ProposalRecord) {
+  if (
+    !isOpenProposal(proposal) ||
+    proposal.sentFollowUps >= proposal.targetFollowUps ||
+    !proposal.nextFollowUpAt
+  ) {
+    return false
+  }
+
+  return new Date(proposal.nextFollowUpAt).getTime() <= Date.now()
+}
+
 function compareNullableDates(firstDate: string | null, secondDate: string | null) {
   const first = firstDate ? new Date(firstDate).getTime() : Number.POSITIVE_INFINITY
   const second = secondDate ? new Date(secondDate).getTime() : Number.POSITIVE_INFINITY
@@ -540,6 +656,9 @@ function App() {
   const [session, setSession] = useState<AuthSession | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [clientForm, setClientForm] = useState<ClientInput>(() => createInitialClientForm())
+  const [proposalForm, setProposalForm] = useState<ProposalFormState>(() =>
+    createInitialProposalForm(),
+  )
   const [authForm, setAuthForm] = useState<AuthFormState>(() => createInitialAuthForm())
   const [settingsForm, setSettingsForm] = useState<SettingsFormState | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode>(() => getInitialAuthMode())
@@ -555,9 +674,12 @@ function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isGoogleAuthenticating, setIsGoogleAuthenticating] = useState(false)
   const [isSubmittingClient, setIsSubmittingClient] = useState(false)
+  const [isSubmittingProposal, setIsSubmittingProposal] = useState(false)
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [isProcessingQueue, setIsProcessingQueue] = useState(false)
+  const [isProcessingProposalQueue, setIsProcessingProposalQueue] = useState(false)
   const [busyClientId, setBusyClientId] = useState<string | null>(null)
+  const [busyProposalId, setBusyProposalId] = useState<string | null>(null)
 
   function recordDiagnostic(context: string, error: unknown) {
     diagnosticIdRef.current += 1
@@ -733,6 +855,33 @@ function App() {
     }
   })
 
+  const processAutomaticGmailProposalFollowUps = useEffectEvent(async () => {
+    if (
+      !gmailConnection?.connected ||
+      !appState?.proposals.some(isProposalFollowUpDue) ||
+      isProcessingProposalQueue
+    ) {
+      return
+    }
+
+    setIsProcessingProposalQueue(true)
+
+    try {
+      const response = await webApp.processDueProposalFollowUps({
+        preferGmail: true,
+      })
+      applyOperationResponse(response, false)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Automatic Gmail proposal follow-up send', error)
+    } finally {
+      setIsProcessingProposalQueue(false)
+    }
+  })
+
   useEffect(() => {
     const handleWindowError = (event: ErrorEvent) => {
       recordDiagnostic('Browser runtime error', event.error ?? event.message)
@@ -897,18 +1046,18 @@ function App() {
     }
 
     const initialCheckId = window.setTimeout(() => {
-      void processAutomaticGmailFollowUps()
+      void processAutomaticGmailFollowUps().then(() => processAutomaticGmailProposalFollowUps())
     }, 1_000)
 
     const intervalId = window.setInterval(() => {
-      void processAutomaticGmailFollowUps()
+      void processAutomaticGmailFollowUps().then(() => processAutomaticGmailProposalFollowUps())
     }, 60_000)
 
     return () => {
       window.clearTimeout(initialCheckId)
       window.clearInterval(intervalId)
     }
-  }, [session, gmailConnection?.connected, appState?.stats.dueNow])
+  }, [session, gmailConnection?.connected, appState?.stats.dueNow, appState?.proposals])
 
   function updateClientSchedule(targetContacts: number) {
     setClientForm((current) => {
@@ -920,6 +1069,20 @@ function App() {
         ...current,
         targetContacts,
         contactScheduleTimes: nextSchedule,
+      }
+    })
+  }
+
+  function updateProposalSchedule(targetFollowUps: number) {
+    setProposalForm((current) => {
+      const nextSchedule = Array.from({ length: targetFollowUps }, (_, index) =>
+        current.followUpScheduleTimes[index] || DEFAULT_SCHEDULE_TIMES[index],
+      )
+
+      return {
+        ...current,
+        targetFollowUps,
+        followUpScheduleTimes: nextSchedule,
       }
     })
   }
@@ -1150,6 +1313,44 @@ function App() {
     }
   }
 
+  async function handleProposalSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setIsSubmittingProposal(true)
+
+    const payload: ProposalInput = {
+      clientName: proposalForm.clientName,
+      email: proposalForm.email,
+      company: proposalForm.company,
+      projectName: proposalForm.projectName,
+      proposalValue: Number(proposalForm.proposalValue) || 0,
+      notes: proposalForm.notes,
+      sentAt: combineDateAndTime(proposalForm.sentDate, '12:00'),
+      nextFollowUpAt: combineDateAndTime(
+        proposalForm.nextFollowUpDate,
+        proposalForm.nextFollowUpTime,
+      ),
+      status: proposalForm.status,
+      targetFollowUps: proposalForm.targetFollowUps,
+      followUpScheduleTimes: proposalForm.followUpScheduleTimes,
+    }
+
+    try {
+      const response = await webApp.createProposal(payload, {
+        preferGmail: gmailConnection?.connected ?? false,
+      })
+      applyOperationResponse(response, false)
+      setProposalForm(createInitialProposalForm())
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Create proposal', error)
+    } finally {
+      setIsSubmittingProposal(false)
+    }
+  }
+
   async function saveSettingsChanges() {
     if (!settingsForm) {
       return
@@ -1211,6 +1412,25 @@ function App() {
     }
   }
 
+  async function handleProcessProposalQueue() {
+    setIsProcessingProposalQueue(true)
+
+    try {
+      const response = await webApp.processDueProposalFollowUps({
+        preferGmail: gmailConnection?.connected ?? false,
+      })
+      applyOperationResponse(response, false)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Process proposal follow-up queue', error)
+    } finally {
+      setIsProcessingProposalQueue(false)
+    }
+  }
+
   async function handleSendClient(clientId: string) {
     setBusyClientId(clientId)
 
@@ -1227,6 +1447,67 @@ function App() {
       recordDiagnostic('Send client follow-up', error)
     } finally {
       setBusyClientId(null)
+    }
+  }
+
+  async function handleSendProposal(proposalId: string) {
+    setBusyProposalId(proposalId)
+
+    try {
+      const response = await webApp.sendProposalFollowUp(proposalId, {
+        preferGmail: gmailConnection?.connected ?? false,
+      })
+      applyOperationResponse(response, false)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Send proposal follow-up', error)
+    } finally {
+      setBusyProposalId(null)
+    }
+  }
+
+  async function handleUpdateProposalStatus(proposal: ProposalRecord, status: ProposalStatus) {
+    setBusyProposalId(proposal.id)
+
+    try {
+      const response = await webApp.updateProposalStatus(proposal.id, status)
+      applyOperationResponse(response, false)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Update proposal status', error)
+    } finally {
+      setBusyProposalId(null)
+    }
+  }
+
+  async function handleDeleteProposal(proposal: ProposalRecord) {
+    const shouldDelete = window.confirm(
+      `You are about to delete the proposal for ${proposal.clientName}. This action cannot be undone.`,
+    )
+
+    if (!shouldDelete) {
+      return
+    }
+
+    setBusyProposalId(proposal.id)
+
+    try {
+      const response = await webApp.deleteProposal(proposal.id)
+      applyOperationResponse(response, false)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Delete proposal', error)
+    } finally {
+      setBusyProposalId(null)
     }
   }
 
@@ -1754,19 +2035,32 @@ function App() {
   }
 
   const activeClients = appState.clients.filter((client) => client.status === 'active')
-  const finishedClients = appState.clients.filter((client) => client.status === 'finished')
-  const canceledClients = appState.clients.filter((client) => client.status === 'canceled')
   const sortedActiveClients = [...activeClients].sort((first, second) =>
     compareNullableDates(first.nextContactAt, second.nextContactAt),
   )
   const dueTodayClients = sortedActiveClients.filter((client) => isDueToday(client.nextContactAt))
   const overdueClients = sortedActiveClients.filter((client) => isOverdue(client.nextContactAt))
+  const openProposals = appState.proposals.filter(isOpenProposal)
+  const approvedProposals = appState.proposals.filter((proposal) => proposal.status === 'approved')
+  const declinedProposals = appState.proposals.filter((proposal) => proposal.status === 'declined')
+  const sentProposals = appState.proposals.filter((proposal) => proposal.status === 'sent')
+  const pendingProposals = appState.proposals.filter((proposal) => proposal.status === 'pending')
+  const sortedOpenProposals = [...openProposals].sort((first, second) =>
+    compareNullableDates(first.nextFollowUpAt, second.nextFollowUpAt),
+  )
+  const dueTodayProposals = sortedOpenProposals.filter((proposal) =>
+    isDueToday(proposal.nextFollowUpAt),
+  )
+  const overdueProposals = sortedOpenProposals.filter((proposal) =>
+    isOverdue(proposal.nextFollowUpAt),
+  )
+  const dueProposalFollowUps = sortedOpenProposals.filter(isProposalFollowUpDue)
   const featuredClients =
     dueTodayClients.length || overdueClients.length
       ? [...overdueClients, ...dueTodayClients]
       : sortedActiveClients.slice(0, 4)
   const mockFollowUpCards = createMockFollowUpCards()
-  const usingMockDashboardData = appState.clients.length === 0
+  const usingMockDashboardData = appState.clients.length === 0 && appState.proposals.length === 0
   const dashboardCards = usingMockDashboardData
     ? mockFollowUpCards
     : featuredClients.map(createDashboardCardFromClient)
@@ -1799,8 +2093,26 @@ function App() {
       .toLowerCase()
       .includes(searchQuery)
   })
-  const recentActivityFromClients: DashboardActivityItem[] = appState.clients
-    .flatMap((client) =>
+  const filteredProposals = appState.proposals.filter((proposal) => {
+    if (!searchQuery) {
+      return true
+    }
+
+    return [
+      proposal.clientName,
+      proposal.company,
+      proposal.email,
+      proposal.projectName,
+      proposal.notes,
+      proposal.status,
+      String(proposal.proposalValue),
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(searchQuery)
+  })
+  const recentActivityFromClients: DashboardActivityItem[] = [
+    ...appState.clients.flatMap((client) =>
       client.history.map((item) => ({
         description: item.error || `${client.name} · ${item.subject}`,
         id: item.id,
@@ -1809,7 +2121,18 @@ function App() {
         title: item.status === 'prepared' ? 'Draft opened' : 'Draft error',
         tone: item.status === 'prepared' ? ('success' as const) : ('danger' as const),
       })),
-    )
+    ),
+    ...appState.proposals.flatMap((proposal) =>
+      proposal.history.map((item) => ({
+        description: item.error || `${proposal.clientName} · ${item.subject}`,
+        id: item.id,
+        isMock: false,
+        timestamp: item.happenedAt,
+        title: item.status === 'prepared' ? 'Proposal follow-up sent' : 'Proposal follow-up error',
+        tone: item.status === 'prepared' ? ('success' as const) : ('danger' as const),
+      })),
+    ),
+  ]
     .sort((first, second) => {
       const firstTime = first.timestamp ? new Date(first.timestamp).getTime() : 0
       const secondTime = second.timestamp ? new Date(second.timestamp).getTime() : 0
@@ -1821,7 +2144,7 @@ function App() {
     : createMockActivityItems()
   const estimatedProposalAmount = usingMockDashboardData
     ? mockFollowUpCards.reduce((total, card) => total + card.proposalAmount, 0)
-    : 0
+    : openProposals.reduce((total, proposal) => total + proposal.proposalValue, 0)
   const kpiCards = [
     {
       helper: usingMockDashboardData ? 'Demo queue until your first client is saved' : 'Scheduled for today',
@@ -1835,42 +2158,50 @@ function App() {
       value: String(usingMockDashboardData ? 2 : overdueClients.length),
     },
     {
-      helper: usingMockDashboardData ? 'Demo proposal pipeline' : 'Using active client sequences',
+      helper: usingMockDashboardData
+        ? 'Demo proposal pipeline'
+        : `${dueProposalFollowUps.length} proposal follow-ups due now`,
       label: 'Active proposals',
-      value: String(usingMockDashboardData ? 7 : activeClients.length),
+      value: String(usingMockDashboardData ? 7 : openProposals.length),
     },
     {
       helper: usingMockDashboardData
         ? 'Demo estimate only'
-        : 'Proposal values are ready for the next database field',
+        : 'Open sent and pending proposals',
       label: 'Estimated proposal value',
       tone: 'accent',
-      value: usingMockDashboardData ? formatCurrency(estimatedProposalAmount) : '$0',
+      value: formatCurrency(estimatedProposalAmount),
     },
   ]
   const proposalPipeline = [
     {
-      count: usingMockDashboardData ? 4 : activeClients.length,
+      count: usingMockDashboardData ? 4 : sentProposals.length,
       label: 'Sent',
-      value: usingMockDashboardData ? '$48K' : 'Active follow-ups',
+      value: usingMockDashboardData
+        ? '$48K'
+        : formatCurrency(sentProposals.reduce((total, proposal) => total + proposal.proposalValue, 0)),
     },
     {
-      count: usingMockDashboardData ? 2 : dueTodayClients.length + overdueClients.length,
+      count: usingMockDashboardData ? 2 : pendingProposals.length,
       label: 'Pending',
       tone: 'warning',
-      value: 'Needs next step',
+      value: `${dueTodayProposals.length + overdueProposals.length} need next step`,
     },
     {
-      count: usingMockDashboardData ? 1 : finishedClients.length,
+      count: usingMockDashboardData ? 1 : approvedProposals.length,
       label: 'Approved',
       tone: 'success',
-      value: 'Closed sequences',
+      value: formatCurrency(
+        approvedProposals.reduce((total, proposal) => total + proposal.proposalValue, 0),
+      ),
     },
     {
-      count: usingMockDashboardData ? 1 : canceledClients.length,
+      count: usingMockDashboardData ? 1 : declinedProposals.length,
       label: 'Declined',
       tone: 'danger',
-      value: 'Paused or stopped',
+      value: formatCurrency(
+        declinedProposals.reduce((total, proposal) => total + proposal.proposalValue, 0),
+      ),
     },
   ]
 
@@ -2087,7 +2418,7 @@ function App() {
           </article>
 
           <div className="dashboard-side-stack">
-            <article className="dashboard-card" id="proposals">
+            <article className="dashboard-card">
               <div className="dashboard-card-header">
                 <div>
                   <span className="eyebrow">Pipeline</span>
@@ -2105,6 +2436,21 @@ function App() {
                   </div>
                 ))}
               </div>
+
+              <button
+                className="secondary-button full-width"
+                disabled={isProcessingProposalQueue || usingMockDashboardData}
+                onClick={() => void handleProcessProposalQueue()}
+                type="button"
+              >
+                {isProcessingProposalQueue
+                  ? gmailConnection?.connected
+                    ? 'Sending proposal follow-up...'
+                    : 'Opening proposal draft...'
+                  : gmailConnection?.connected
+                    ? 'Send next proposal email'
+                    : 'Open next proposal draft'}
+              </button>
             </article>
 
             <article className="dashboard-card">
@@ -2132,6 +2478,395 @@ function App() {
           </div>
         </section>
 
+        <section className="dashboard-card proposal-workspace-card" id="proposals">
+          <div className="dashboard-card-header">
+            <div>
+              <span className="eyebrow">Proposals</span>
+              <h2>Proposal follow-up workspace</h2>
+            </div>
+            <div className="proposal-header-actions">
+              <span className="section-count">{filteredProposals.length}</span>
+              <button
+                className="secondary-button compact-action"
+                disabled={isProcessingProposalQueue || appState.proposals.length === 0}
+                onClick={() => void handleProcessProposalQueue()}
+                type="button"
+              >
+                {isProcessingProposalQueue
+                  ? gmailConnection?.connected
+                    ? 'Sending...'
+                    : 'Opening...'
+                  : gmailConnection?.connected
+                    ? 'Send due proposal'
+                    : 'Open due draft'}
+              </button>
+            </div>
+          </div>
+
+          <p className="dashboard-card-copy">
+            Add proposals that have already been sent, schedule the next check-in, and send those
+            proposal follow-up emails from the connected Gmail account when they are due.
+          </p>
+
+          <div className="proposal-workspace-grid">
+            <article className="proposal-intake-card">
+              <div className="studio-heading">
+                <span className="section-index">02</span>
+                <div>
+                  <span className="eyebrow">Sent proposal</span>
+                  <h3>Add proposal to follow up</h3>
+                </div>
+              </div>
+
+              <form className="stack-form" onSubmit={handleProposalSubmit}>
+                <label className="field">
+                  <span>Client name</span>
+                  <input
+                    onChange={(event) =>
+                      setProposalForm((current) => ({
+                        ...current,
+                        clientName: event.target.value,
+                      }))
+                    }
+                    placeholder="e.g. Acme Roofing"
+                    required
+                    type="text"
+                    value={proposalForm.clientName}
+                  />
+                </label>
+
+                <div className="field-row">
+                  <label className="field">
+                    <span>Email</span>
+                    <input
+                      onChange={(event) =>
+                        setProposalForm((current) => ({ ...current, email: event.target.value }))
+                      }
+                      placeholder="decisionmaker@company.com"
+                      required
+                      type="email"
+                      value={proposalForm.email}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Company</span>
+                    <input
+                      onChange={(event) =>
+                        setProposalForm((current) => ({ ...current, company: event.target.value }))
+                      }
+                      placeholder="Optional"
+                      type="text"
+                      value={proposalForm.company}
+                    />
+                  </label>
+                </div>
+
+                <label className="field">
+                  <span>Project / proposal name</span>
+                  <input
+                    onChange={(event) =>
+                      setProposalForm((current) => ({
+                        ...current,
+                        projectName: event.target.value,
+                      }))
+                    }
+                    placeholder="Commercial roof replacement"
+                    required
+                    type="text"
+                    value={proposalForm.projectName}
+                  />
+                </label>
+
+                <div className="field-row">
+                  <label className="field">
+                    <span>Proposal value</span>
+                    <input
+                      inputMode="decimal"
+                      min="0"
+                      onChange={(event) =>
+                        setProposalForm((current) => ({
+                          ...current,
+                          proposalValue: event.target.value,
+                        }))
+                      }
+                      placeholder="24500"
+                      type="number"
+                      value={proposalForm.proposalValue}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Status</span>
+                    <select
+                      className="select-input"
+                      onChange={(event) =>
+                        setProposalForm((current) => ({
+                          ...current,
+                          status: event.target.value as ProposalStatus,
+                        }))
+                      }
+                      value={proposalForm.status}
+                    >
+                      <option value="sent">Sent</option>
+                      <option value="pending">Pending</option>
+                      <option value="approved">Approved</option>
+                      <option value="declined">Declined</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="field-row">
+                  <label className="field">
+                    <span>Proposal sent date</span>
+                    <input
+                      onChange={(event) =>
+                        setProposalForm((current) => ({
+                          ...current,
+                          sentDate: event.target.value,
+                        }))
+                      }
+                      required
+                      type="date"
+                      value={proposalForm.sentDate}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Next follow-up date</span>
+                    <input
+                      disabled={
+                        proposalForm.status === 'approved' || proposalForm.status === 'declined'
+                      }
+                      onChange={(event) =>
+                        setProposalForm((current) => ({
+                          ...current,
+                          nextFollowUpDate: event.target.value,
+                        }))
+                      }
+                      required={proposalForm.status === 'sent' || proposalForm.status === 'pending'}
+                      type="date"
+                      value={proposalForm.nextFollowUpDate}
+                    />
+                  </label>
+                </div>
+
+                <div className="composer-topline">
+                  <label className="field compact-field">
+                    <span>Follow-ups</span>
+                    <select
+                      className="select-input"
+                      onChange={(event) => updateProposalSchedule(Number(event.target.value))}
+                      value={proposalForm.targetFollowUps}
+                    >
+                      {Array.from({ length: MAX_CONTACTS }, (_, index) => {
+                        const option = index + 1
+                        return (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </label>
+
+                  <label className="field compact-field">
+                    <span>Next send time</span>
+                    <input
+                      disabled={
+                        proposalForm.status === 'approved' || proposalForm.status === 'declined'
+                      }
+                      onChange={(event) =>
+                        setProposalForm((current) => ({
+                          ...current,
+                          nextFollowUpTime: event.target.value,
+                        }))
+                      }
+                      required={proposalForm.status === 'sent' || proposalForm.status === 'pending'}
+                      type="time"
+                      value={proposalForm.nextFollowUpTime}
+                    />
+                  </label>
+                </div>
+
+                <div className="schedule-board">
+                  {proposalForm.followUpScheduleTimes.map((time, index) => (
+                    <label className="schedule-tile" key={`proposal-follow-up-time-${index + 1}`}>
+                      <span>Proposal follow-up {index + 1}</span>
+                      <input
+                        onChange={(event) =>
+                          setProposalForm((current) => ({
+                            ...current,
+                            followUpScheduleTimes: current.followUpScheduleTimes.map(
+                              (item, itemIndex) =>
+                                itemIndex === index ? event.target.value : item,
+                            ),
+                          }))
+                        }
+                        required
+                        type="time"
+                        value={time}
+                      />
+                    </label>
+                  ))}
+                </div>
+
+                <label className="field">
+                  <span>Internal proposal notes</span>
+                  <textarea
+                    onChange={(event) =>
+                      setProposalForm((current) => ({ ...current, notes: event.target.value }))
+                    }
+                    placeholder="Decision maker, objections, proposal terms, next steps..."
+                    rows={4}
+                    value={proposalForm.notes}
+                  />
+                </label>
+
+                <button className="primary-button full-width" disabled={isSubmittingProposal} type="submit">
+                  {isSubmittingProposal ? 'Saving proposal...' : 'Save proposal'}
+                </button>
+              </form>
+            </article>
+
+            <div className="proposal-directory-list">
+              {filteredProposals.length === 0 ? (
+                <article className="dashboard-empty-state">
+                  <h3>No proposals tracked yet</h3>
+                  <p>Add a sent proposal to start a dedicated follow-up sequence.</p>
+                </article>
+              ) : (
+                filteredProposals.map((proposal) => {
+                  const isBusy = busyProposalId === proposal.id
+                  const isClosed =
+                    proposal.status === 'approved' || proposal.status === 'declined'
+                  const isComplete = proposal.sentFollowUps >= proposal.targetFollowUps
+                  const priority = getProposalPriority(proposal)
+                  const attemptStatuses = createProposalAttemptStatuses(proposal)
+
+                  return (
+                    <article className="proposal-directory-card" key={proposal.id}>
+                      <div className="client-directory-head">
+                        <div>
+                          <div className="identity-row">
+                            <span className={`proposal-status proposal-status-${proposal.status}`}>
+                              {getProposalStatusLabel(proposal.status)}
+                            </span>
+                            {!isClosed ? (
+                              <span className={`priority-badge priority-${priority.toLowerCase()}`}>
+                                {priority} priority
+                              </span>
+                            ) : null}
+                          </div>
+                          <h3>{proposal.projectName}</h3>
+                          <p className="client-subtitle">
+                            {proposal.clientName} · {proposal.company || 'No company'} ·{' '}
+                            {proposal.email}
+                          </p>
+                        </div>
+
+                        <div className="next-window">
+                          <span>{isClosed ? 'Closed' : 'Next proposal email'}</span>
+                          <strong>
+                            {isClosed
+                              ? getProposalStatusLabel(proposal.status)
+                              : formatRelativeDue(proposal.nextFollowUpAt)}
+                          </strong>
+                          <small>
+                            {isClosed
+                              ? formatDateTime(proposal.approvedAt || proposal.declinedAt)
+                              : formatDateTime(proposal.nextFollowUpAt)}
+                          </small>
+                        </div>
+                      </div>
+
+                      <div className="followup-detail-grid">
+                        <div>
+                          <span>Proposal value</span>
+                          <strong>{formatCurrency(proposal.proposalValue)}</strong>
+                        </div>
+                        <div>
+                          <span>Sent date</span>
+                          <strong>{formatDateTime(proposal.sentAt)}</strong>
+                        </div>
+                        <div>
+                          <span>Last follow-up</span>
+                          <strong>{formatDateTime(proposal.lastFollowUpAt)}</strong>
+                        </div>
+                      </div>
+
+                      <div className="attempt-track">
+                        {attemptStatuses.map((status, index) => (
+                          <div
+                            className={`attempt-node attempt-node-${status}`}
+                            key={`${proposal.id}-proposal-${index + 1}`}
+                          >
+                            <span>{`Follow-up ${index + 1}`}</span>
+                            <strong>{proposal.followUpScheduleTimes[index]}</strong>
+                          </div>
+                        ))}
+                      </div>
+
+                      <p className="followup-summary">{proposal.notes || getProposalStageLabel(proposal)}</p>
+
+                      <div className="followup-action-row">
+                        <button
+                          className="primary-button"
+                          disabled={isBusy || isClosed || isComplete}
+                          onClick={() => void handleSendProposal(proposal.id)}
+                          type="button"
+                        >
+                          {isBusy
+                            ? gmailConnection?.connected
+                              ? 'Sending...'
+                              : 'Opening...'
+                            : gmailConnection?.connected
+                              ? 'Send Proposal Email'
+                              : 'Open Proposal Draft'}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={isBusy || proposal.status === 'approved'}
+                          onClick={() => void handleUpdateProposalStatus(proposal, 'approved')}
+                          type="button"
+                        >
+                          Mark Approved
+                        </button>
+                        <button
+                          className="ghost-button"
+                          disabled={isBusy || proposal.status === 'declined'}
+                          onClick={() => void handleUpdateProposalStatus(proposal, 'declined')}
+                          type="button"
+                        >
+                          Mark Declined
+                        </button>
+                        {isClosed ? (
+                          <button
+                            className="secondary-button"
+                            disabled={isBusy}
+                            onClick={() => void handleUpdateProposalStatus(proposal, 'pending')}
+                            type="button"
+                          >
+                            Reopen Pending
+                          </button>
+                        ) : null}
+                        <button
+                          className="danger-button"
+                          disabled={isBusy}
+                          onClick={() => void handleDeleteProposal(proposal)}
+                          type="button"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </article>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </section>
+
         <section className="dashboard-operations-grid">
           <article className="dashboard-card" id="email-drafts">
             <div className="dashboard-card-header">
@@ -2140,30 +2875,46 @@ function App() {
                 <h2>{gmailConnection?.connected ? 'Gmail sending' : 'Draft queue'}</h2>
               </div>
               <span className={`section-count ${gmailConnection?.connected ? 'gmail-connected-count' : ''}`}>
-                {gmailConnection?.connected ? 'Gmail' : appState.stats.dueNow}
+                {gmailConnection?.connected ? 'Gmail' : appState.stats.dueNow + dueProposalFollowUps.length}
               </span>
             </div>
 
             <p className="dashboard-card-copy">
               {gmailConnection?.connected
-                ? `Connected as ${gmailConnection.email}. Follow-ups will send through Gmail API from that account.`
-                : 'Email sending stays exactly as before: the app opens a prepared `mailto:` draft in your default mail app until Gmail is connected.'}
+                ? `Connected as ${gmailConnection.email}. Client and proposal follow-ups send through Gmail API from that account.`
+                : 'Email sending stays exactly as before: the app opens prepared `mailto:` drafts for client and proposal follow-ups until Gmail is connected.'}
             </p>
 
-            <button
-              className="primary-button full-width"
-              disabled={isProcessingQueue}
-              onClick={() => void handleProcessQueue()}
-              type="button"
-            >
-              {isProcessingQueue
-                ? gmailConnection?.connected
-                  ? 'Sending next follow-up...'
-                  : 'Opening next draft...'
-                : gmailConnection?.connected
-                  ? 'Send next scheduled email'
-                  : 'Open next scheduled draft'}
-            </button>
+            <div className="email-action-stack">
+              <button
+                className="primary-button full-width"
+                disabled={isProcessingQueue}
+                onClick={() => void handleProcessQueue()}
+                type="button"
+              >
+                {isProcessingQueue
+                  ? gmailConnection?.connected
+                    ? 'Sending client follow-up...'
+                    : 'Opening client draft...'
+                  : gmailConnection?.connected
+                    ? 'Send next client email'
+                    : 'Open next client draft'}
+              </button>
+              <button
+                className="secondary-button full-width"
+                disabled={isProcessingProposalQueue}
+                onClick={() => void handleProcessProposalQueue()}
+                type="button"
+              >
+                {isProcessingProposalQueue
+                  ? gmailConnection?.connected
+                    ? 'Sending proposal follow-up...'
+                    : 'Opening proposal draft...'
+                  : gmailConnection?.connected
+                    ? 'Send next proposal email'
+                    : 'Open next proposal draft'}
+              </button>
+            </div>
           </article>
 
           <article className="dashboard-card" id="settings">
@@ -2180,8 +2931,8 @@ function App() {
                 <h3>{gmailConnection?.connected ? 'Gmail is connected' : 'Connect Gmail'}</h3>
                 <p>
                   {gmailConnection?.connected
-                    ? `Emails will be sent from ${gmailConnection.email}. Due follow-ups send automatically while this dashboard is open.`
-                    : 'Let users authorize Gmail once so follow-up emails can send automatically from their own account.'}
+                    ? `Emails will be sent from ${gmailConnection.email}. Due client and proposal follow-ups send automatically while this dashboard is open.`
+                    : 'Let users authorize Gmail once so client and proposal follow-up emails can send automatically from their own account.'}
                 </p>
               </div>
 

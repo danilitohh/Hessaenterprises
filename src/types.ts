@@ -22,6 +22,7 @@ export type AuthActionResult = {
 
 export type FollowUpStatus = 'prepared' | 'failed'
 export type ClientStatus = 'active' | 'finished' | 'canceled'
+export type ProposalStatus = 'approved' | 'declined' | 'pending' | 'sent'
 
 export type EmailTemplate = {
   id: string
@@ -61,6 +62,29 @@ export type ClientRecord = {
   history: FollowUpHistoryItem[]
 }
 
+export type ProposalRecord = {
+  id: string
+  clientName: string
+  email: string
+  company: string
+  projectName: string
+  proposalValue: number
+  notes: string
+  status: ProposalStatus
+  sentAt: string
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+  declinedAt: string | null
+  nextFollowUpAt: string | null
+  lastFollowUpAt: string | null
+  lastError: string | null
+  sentFollowUps: number
+  targetFollowUps: number
+  followUpScheduleTimes: string[]
+  history: FollowUpHistoryItem[]
+}
+
 export type DashboardStats = {
   active: number
   canceled: number
@@ -88,6 +112,7 @@ export type AppState = {
   settings: SettingsState
   stats: DashboardStats
   clients: ClientRecord[]
+  proposals: ProposalRecord[]
 }
 
 export type ProcessResult = {
@@ -108,6 +133,20 @@ export type ClientInput = {
   notes: string
   targetContacts: number
   contactScheduleTimes: string[]
+}
+
+export type ProposalInput = {
+  clientName: string
+  email: string
+  company: string
+  projectName: string
+  proposalValue: number
+  notes: string
+  sentAt: string
+  nextFollowUpAt: string
+  status: ProposalStatus
+  targetFollowUps: number
+  followUpScheduleTimes: string[]
 }
 
 export type SettingsInput = {
