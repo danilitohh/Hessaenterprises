@@ -49,6 +49,12 @@ export async function connectGmailAccount() {
   )
 
   if (error) {
+    if (error.message.includes('Failed to send a request to the Edge Function')) {
+      throw new Error(
+        'Gmail Edge Functions are not deployed yet. Deploy gmail-oauth-start and the related Gmail functions in Supabase, then try again.',
+      )
+    }
+
     throw new Error(error.message)
   }
 
