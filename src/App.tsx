@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useEffectEvent, useState, type FormEvent } from 'react'
+import { startTransition, useEffect, useEffectEvent, useRef, useState, type FormEvent } from 'react'
 import appointmentManagementIcon from './assets/landing-icons/appointment-management.png?url&no-inline'
 import browserAccessIcon from './assets/landing-icons/browser-access.png?url&no-inline'
 import clientHistoryIcon from './assets/landing-icons/client-history.png?url&no-inline'
@@ -32,6 +32,13 @@ const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 type Notice = {
   tone: 'error' | 'info' | 'success'
   message: string
+}
+
+type DiagnosticEntry = {
+  context: string
+  detail: string
+  id: string
+  timestamp: string
 }
 
 type AuthMode = 'forgot-password' | 'login' | 'register' | 'reset-password'
@@ -71,6 +78,22 @@ function createInitialAuthForm(): AuthFormState {
 
 function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Something went wrong.'
+}
+
+function toDiagnosticDetail(error: unknown) {
+  if (error instanceof Error) {
+    return error.stack || error.message
+  }
+
+  if (typeof error === 'string') {
+    return error
+  }
+
+  try {
+    return JSON.stringify(error, null, 2)
+  } catch {
+    return 'Unknown non-serializable error.'
+  }
 }
 
 function getAuthTitle(authMode: AuthMode) {
@@ -276,6 +299,7 @@ const templateTokens = [
 ]
 
 function App() {
+  const diagnosticIdRef = useRef(0)
   const [session, setSession] = useState<AuthSession | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [clientForm, setClientForm] = useState<ClientInput>(() => createInitialClientForm())
@@ -283,6 +307,8 @@ function App() {
   const [settingsForm, setSettingsForm] = useState<SettingsFormState | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([])
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isGoogleAuthenticating, setIsGoogleAuthenticating] = useState(false)
@@ -290,6 +316,58 @@ function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [isProcessingQueue, setIsProcessingQueue] = useState(false)
   const [busyClientId, setBusyClientId] = useState<string | null>(null)
+
+  function recordDiagnostic(context: string, error: unknown) {
+    diagnosticIdRef.current += 1
+
+    const entry: DiagnosticEntry = {
+      context,
+      detail: toDiagnosticDetail(error),
+      id: `diagnostic-${diagnosticIdRef.current}`,
+      timestamp: new Date().toISOString(),
+    }
+
+    setDiagnostics((current) => [entry, ...current].slice(0, 10))
+  }
+
+  function buildDiagnosticsReport() {
+    return [
+      'Hessa diagnostics report',
+      `Generated: ${new Date().toISOString()}`,
+      `Page: ${window.location.href}`,
+      `User agent: ${navigator.userAgent}`,
+      `Session: ${session ? `signed in as ${session.user.email}` : 'signed out'}`,
+      '',
+      diagnostics.length
+        ? diagnostics
+            .map(
+              (entry, index) =>
+                [
+                  `#${index + 1} ${entry.context}`,
+                  `Time: ${entry.timestamp}`,
+                  `Detail: ${entry.detail}`,
+                ].join('\n'),
+            )
+            .join('\n\n')
+        : 'No diagnostics captured yet.',
+    ].join('\n')
+  }
+
+  async function copyDiagnosticsReport() {
+    try {
+      await navigator.clipboard.writeText(buildDiagnosticsReport())
+      setNotice({
+        tone: 'success',
+        message: 'Diagnostics copied. Send that report to support.',
+      })
+    } catch (error) {
+      recordDiagnostic('Copy diagnostics', error)
+      setNotice({
+        tone: 'error',
+        message: 'Could not copy diagnostics. You can select the text manually.',
+      })
+    }
+  }
 
   function applyAppState(nextState: AppState, syncSettings: boolean) {
     startTransition(() => {
@@ -309,6 +387,10 @@ function App() {
         tone: response.result.failed > 0 ? 'error' : 'success',
         message: response.result.message,
       })
+
+      if (response.result.failed > 0) {
+        recordDiagnostic('Workspace operation', response.result.message)
+      }
     }
   }
 
@@ -329,6 +411,7 @@ function App() {
         tone: 'error',
         message,
       })
+      recordDiagnostic('Refresh workspace state', error)
     } finally {
       setLoading(false)
     }
@@ -347,8 +430,42 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Sync auth session', error)
     }
   })
+
+  useEffect(() => {
+    const handleWindowError = (event: ErrorEvent) => {
+      recordDiagnostic('Browser runtime error', event.error ?? event.message)
+    }
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      recordDiagnostic('Unhandled promise rejection', event.reason)
+    }
+
+    window.addEventListener('error', handleWindowError)
+    window.addEventListener('unhandledrejection', handleUnhandledRejection)
+
+    const currentUrl = new URL(window.location.href)
+    const authError =
+      currentUrl.searchParams.get('error_description') ||
+      currentUrl.searchParams.get('error') ||
+      currentUrl.hash.match(/error_description=([^&]+)/)?.[1] ||
+      currentUrl.hash.match(/error=([^&]+)/)?.[1]
+    const authErrorTimer = authError
+      ? window.setTimeout(() => {
+          recordDiagnostic('Auth redirect error', decodeURIComponent(authError.replace(/\+/g, ' ')))
+        }, 0)
+      : null
+
+    return () => {
+      if (authErrorTimer) {
+        window.clearTimeout(authErrorTimer)
+      }
+
+      window.removeEventListener('error', handleWindowError)
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection)
+    }
+  }, [])
 
   useEffect(() => {
     const boot = async () => {
@@ -360,6 +477,7 @@ function App() {
           tone: 'error',
           message: toErrorMessage(error),
         })
+        recordDiagnostic('Initial auth session check', error)
       } finally {
         setLoading(false)
       }
@@ -523,6 +641,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic(`Auth submit: ${authMode}`, error)
     } finally {
       setIsAuthenticating(false)
     }
@@ -542,6 +661,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Google auth redirect', error)
       setIsGoogleAuthenticating(false)
     }
   }
@@ -571,6 +691,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Logout', error)
     }
   }
 
@@ -587,6 +708,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Create client', error)
     } finally {
       setIsSubmittingClient(false)
     }
@@ -623,6 +745,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Save settings', error)
     } finally {
       setIsSavingSettings(false)
     }
@@ -644,6 +767,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Process follow-up queue', error)
     } finally {
       setIsProcessingQueue(false)
     }
@@ -660,6 +784,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Send client follow-up', error)
     } finally {
       setBusyClientId(null)
     }
@@ -677,6 +802,7 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Toggle client status', error)
     } finally {
       setBusyClientId(null)
     }
@@ -701,14 +827,86 @@ function App() {
         tone: 'error',
         message: toErrorMessage(error),
       })
+      recordDiagnostic('Delete client', error)
     } finally {
       setBusyClientId(null)
     }
   }
 
+  const diagnosticsPanel = (
+    <aside className={`diagnostics-panel ${isDiagnosticsOpen ? 'diagnostics-panel-open' : ''}`}>
+      <button
+        className={`diagnostics-trigger ${diagnostics.length ? 'diagnostics-trigger-alert' : ''}`}
+        onClick={() => setIsDiagnosticsOpen((current) => !current)}
+        type="button"
+      >
+        Diagnostics
+        {diagnostics.length ? <span>{diagnostics.length}</span> : null}
+      </button>
+
+      {isDiagnosticsOpen ? (
+        <div className="diagnostics-card">
+          <div className="diagnostics-card-header">
+            <div>
+              <span className="eyebrow">Support report</span>
+              <h3>What went wrong?</h3>
+            </div>
+            <button
+              aria-label="Close diagnostics"
+              className="diagnostics-close"
+              onClick={() => setIsDiagnosticsOpen(false)}
+              type="button"
+            >
+              x
+            </button>
+          </div>
+
+          <p>
+            If something fails, copy this report and send it to support so we can see the exact
+            error context.
+          </p>
+
+          <div className="diagnostics-actions">
+            <button
+              className="secondary-button"
+              disabled={diagnostics.length === 0}
+              onClick={() => void copyDiagnosticsReport()}
+              type="button"
+            >
+              Copy report
+            </button>
+            <button
+              className="ghost-button"
+              disabled={diagnostics.length === 0}
+              onClick={() => setDiagnostics([])}
+              type="button"
+            >
+              Clear
+            </button>
+          </div>
+
+          <div className="diagnostics-list">
+            {diagnostics.length ? (
+              diagnostics.map((entry) => (
+                <article className="diagnostics-entry" key={entry.id}>
+                  <strong>{entry.context}</strong>
+                  <span>{new Date(entry.timestamp).toLocaleString()}</span>
+                  <pre>{entry.detail}</pre>
+                </article>
+              ))
+            ) : (
+              <div className="diagnostics-empty">No errors captured yet.</div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </aside>
+  )
+
   if (!session) {
     return (
       <main className="crm-shell landing-shell">
+        {diagnosticsPanel}
         <section className="landing-hero-grid">
           <article className="panel landing-hero-panel">
             <div className="landing-hero-top">
@@ -1022,6 +1220,7 @@ function App() {
   if (loading || !appState || !settingsForm) {
     return (
       <main className="crm-shell">
+        {diagnosticsPanel}
         <section className="loading-stage panel">
           <img alt="Hessa Enterprises" className="loading-wordmark" src={logoWordmark} />
           <div className="loading-copy">
@@ -1047,6 +1246,7 @@ function App() {
 
   return (
     <main className="crm-shell">
+      {diagnosticsPanel}
       <header className="workspace-topbar">
         <div className="workspace-brand">
           <span className="eyebrow">Hessa Follow Up</span>

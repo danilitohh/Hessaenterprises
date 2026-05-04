@@ -841,6 +841,143 @@
   color: var(--ink-soft);
 }
 
+.diagnostics-panel {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 20;
+  display: grid;
+  justify-items: end;
+  gap: 12px;
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.diagnostics-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(31, 52, 72, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 18px 34px rgba(31, 52, 72, 0.14);
+  color: var(--navy-strong);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+}
+
+.diagnostics-trigger-alert {
+  border-color: rgba(146, 76, 69, 0.22);
+  color: var(--danger-strong);
+}
+
+.diagnostics-trigger span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger-strong);
+  font-size: 0.76rem;
+}
+
+.diagnostics-card {
+  display: grid;
+  gap: 14px;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(620px, calc(100vh - 110px));
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(185, 138, 74, 0.12), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 243, 236, 0.96));
+  box-shadow: 0 24px 64px rgba(34, 39, 48, 0.16);
+  padding: 20px;
+  backdrop-filter: blur(20px);
+}
+
+.diagnostics-card-header,
+.diagnostics-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.diagnostics-card-header > div {
+  display: grid;
+  gap: 8px;
+}
+
+.diagnostics-card > p {
+  color: var(--ink-soft);
+  line-height: 1.62;
+}
+
+.diagnostics-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink-soft);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.diagnostics-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.diagnostics-entry,
+.diagnostics-empty {
+  border: 1px solid var(--line-soft);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 14px;
+}
+
+.diagnostics-entry {
+  display: grid;
+  gap: 8px;
+}
+
+.diagnostics-entry strong {
+  color: var(--ink-strong);
+}
+
+.diagnostics-entry span,
+.diagnostics-empty {
+  color: var(--ink-muted);
+  font-size: 0.86rem;
+}
+
+.diagnostics-entry pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--danger-strong);
+  font-family: 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
 .metric-ribbon {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
@@ -1419,6 +1556,15 @@
   .crm-shell {
     width: min(100%, calc(100% - 20px));
     padding-top: 20px;
+  }
+
+  .diagnostics-panel {
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .diagnostics-card {
+    max-height: min(560px, calc(100vh - 86px));
   }
 
   .brand-stage,
