@@ -710,6 +710,29 @@ function App() {
     await refreshGmailConnection(showErrors)
   })
 
+  const processAutomaticGmailFollowUps = useEffectEvent(async () => {
+    if (!gmailConnection?.connected || !appState?.stats.dueNow || isProcessingQueue) {
+      return
+    }
+
+    setIsProcessingQueue(true)
+
+    try {
+      const response = await webApp.processDueFollowUps({
+        preferGmail: true,
+      })
+      applyOperationResponse(response, false)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Automatic Gmail follow-up send', error)
+    } finally {
+      setIsProcessingQueue(false)
+    }
+  })
+
   useEffect(() => {
     const handleWindowError = (event: ErrorEvent) => {
       recordDiagnostic('Browser runtime error', event.error ?? event.message)
@@ -867,6 +890,25 @@ function App() {
       window.clearTimeout(gmailTimer)
     }
   }, [session])
+
+  useEffect(() => {
+    if (!session || !gmailConnection?.connected) {
+      return
+    }
+
+    const initialCheckId = window.setTimeout(() => {
+      void processAutomaticGmailFollowUps()
+    }, 1_000)
+
+    const intervalId = window.setInterval(() => {
+      void processAutomaticGmailFollowUps()
+    }, 60_000)
+
+    return () => {
+      window.clearTimeout(initialCheckId)
+      window.clearInterval(intervalId)
+    }
+  }, [session, gmailConnection?.connected, appState?.stats.dueNow])
 
   function updateClientSchedule(targetContacts: number) {
     setClientForm((current) => {
@@ -2004,7 +2046,13 @@ function App() {
                           }}
                           type="button"
                         >
-                          {isBusy ? 'Opening...' : 'Open Draft'}
+                          {isBusy
+                            ? gmailConnection?.connected
+                              ? 'Sending...'
+                              : 'Opening...'
+                            : gmailConnection?.connected
+                              ? 'Send Email'
+                              : 'Open Draft'}
                         </button>
                         <button
                           className="ghost-button"
@@ -2132,7 +2180,7 @@ function App() {
                 <h3>{gmailConnection?.connected ? 'Gmail is connected' : 'Connect Gmail'}</h3>
                 <p>
                   {gmailConnection?.connected
-                    ? `Emails will be sent from ${gmailConnection.email}. You can disconnect anytime.`
+                    ? `Emails will be sent from ${gmailConnection.email}. Due follow-ups send automatically while this dashboard is open.`
                     : 'Let users authorize Gmail once so follow-up emails can send automatically from their own account.'}
                 </p>
               </div>
@@ -2436,7 +2484,13 @@ function App() {
                               onClick={() => void handleSendClient(client.id)}
                               type="button"
                             >
-                              {isBusy ? 'Opening...' : 'Open draft'}
+                              {isBusy
+                                ? gmailConnection?.connected
+                                  ? 'Sending...'
+                                  : 'Opening...'
+                                : gmailConnection?.connected
+                                  ? 'Send email'
+                                  : 'Open draft'}
                             </button>
                             <button
                               className="ghost-button"

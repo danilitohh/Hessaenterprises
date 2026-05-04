@@ -678,33 +678,33 @@ async function sendWithConnectedGmail(
     contactNumber: number
     scheduledFor: string
   },
-): Promise<EmailDeliveryResult | null> {
-  try {
-    const supabase = getSupabaseClient()
-    const { data, error } = await supabase.functions.invoke<GmailSendFunctionResponse>(
-      'gmail-send-followup',
-      {
-        body: {
-          body,
-          clientName: metadata.clientName,
-          contactNumber: metadata.contactNumber,
-          scheduledFor: metadata.scheduledFor,
-          subject,
-          to: recipient,
-        },
+): Promise<EmailDeliveryResult> {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase.functions.invoke<GmailSendFunctionResponse>(
+    'gmail-send-followup',
+    {
+      body: {
+        body,
+        clientName: metadata.clientName,
+        contactNumber: metadata.contactNumber,
+        scheduledFor: metadata.scheduledFor,
+        subject,
+        to: recipient,
       },
-    )
+    },
+  )
 
-    if (error || !data?.sent) {
-      return null
-    }
+  if (error) {
+    throw new Error(error.message)
+  }
 
-    return {
-      detail: data.fromEmail ? `Sent through Gmail from ${data.fromEmail}.` : 'Sent through Gmail.',
-      method: 'gmail',
-    }
-  } catch {
-    return null
+  if (!data?.sent) {
+    throw new Error(data?.message || data?.reason || 'Gmail did not send the follow-up.')
+  }
+
+  return {
+    detail: data.fromEmail ? `Sent through Gmail from ${data.fromEmail}.` : 'Sent through Gmail.',
+    method: 'gmail',
   }
 }
 
@@ -720,11 +720,7 @@ async function deliverFollowUpEmail(
   },
 ): Promise<EmailDeliveryResult> {
   if (metadata.preferGmail) {
-    const gmailDelivery = await sendWithConnectedGmail(recipient, subject, body, metadata)
-
-    if (gmailDelivery) {
-      return gmailDelivery
-    }
+    return sendWithConnectedGmail(recipient, subject, body, metadata)
   }
 
   openMailDraft(recipient, subject, body)
