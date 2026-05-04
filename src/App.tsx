@@ -21,6 +21,12 @@ import type {
   SettingsInput,
   SettingsState,
 } from './types'
+import {
+  connectGmailAccount,
+  disconnectGmailAccount,
+  getGmailConnectionStatus,
+  type GmailConnectionStatus,
+} from './gmailIntegration'
 import { supabase } from './supabaseClient'
 import { webApp } from './webApp'
 import './App.css'
@@ -541,6 +547,10 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([])
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false)
   const [dashboardSearch, setDashboardSearch] = useState('')
+  const [gmailConnection, setGmailConnection] = useState<GmailConnectionStatus | null>(null)
+  const [isCheckingGmailConnection, setIsCheckingGmailConnection] = useState(false)
+  const [isConnectingGmail, setIsConnectingGmail] = useState(false)
+  const [isDisconnectingGmail, setIsDisconnectingGmail] = useState(false)
   const [loading, setLoading] = useState(true)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isGoogleAuthenticating, setIsGoogleAuthenticating] = useState(false)
@@ -666,6 +676,40 @@ function App() {
     }
   })
 
+  async function refreshGmailConnection(showErrors = false) {
+    if (!session) {
+      return
+    }
+
+    setIsCheckingGmailConnection(true)
+
+    try {
+      const nextConnection = await getGmailConnectionStatus()
+      setGmailConnection(nextConnection)
+    } catch (error) {
+      setGmailConnection({
+        connected: false,
+        connectedAt: null,
+        email: null,
+        mode: 'draft',
+      })
+      recordDiagnostic('Gmail connection status', error)
+
+      if (showErrors) {
+        setNotice({
+          tone: 'error',
+          message: toErrorMessage(error),
+        })
+      }
+    } finally {
+      setIsCheckingGmailConnection(false)
+    }
+  }
+
+  const refreshGmailConnectionFromEffect = useEffectEvent(async (showErrors = false) => {
+    await refreshGmailConnection(showErrors)
+  })
+
   useEffect(() => {
     const handleWindowError = (event: ErrorEvent) => {
       recordDiagnostic('Browser runtime error', event.error ?? event.message)
@@ -746,6 +790,7 @@ function App() {
           setSession(null)
           setAppState(null)
           setSettingsForm(null)
+          setGmailConnection(null)
           return
         }
 
@@ -781,6 +826,45 @@ function App() {
     return () => {
       window.clearTimeout(bootId)
       window.clearInterval(intervalId)
+    }
+  }, [session])
+
+  useEffect(() => {
+    if (!session) {
+      return
+    }
+
+    const gmailTimer = window.setTimeout(() => {
+      const currentUrl = new URL(window.location.href)
+      const gmailResult = currentUrl.searchParams.get('gmail')
+      const gmailError = currentUrl.searchParams.get('gmail_error')
+
+      if (gmailResult === 'connected') {
+        setNotice({
+          tone: 'success',
+          message:
+            'Gmail connected. Follow-up emails can now be sent from your connected Gmail account.',
+        })
+        currentUrl.searchParams.delete('gmail')
+        window.history.replaceState({}, document.title, currentUrl.toString())
+      }
+
+      if (gmailError) {
+        const message = decodeURIComponent(gmailError.replace(/\+/g, ' '))
+        setNotice({
+          tone: 'error',
+          message,
+        })
+        recordDiagnostic('Gmail OAuth callback', message)
+        currentUrl.searchParams.delete('gmail_error')
+        window.history.replaceState({}, document.title, currentUrl.toString())
+      }
+
+      void refreshGmailConnectionFromEffect(gmailResult === 'connected' || Boolean(gmailError))
+    }, 0)
+
+    return () => {
+      window.clearTimeout(gmailTimer)
     }
   }, [session])
 
@@ -898,6 +982,46 @@ function App() {
     }
   }
 
+  async function handleConnectGmail() {
+    setIsConnectingGmail(true)
+
+    try {
+      await connectGmailAccount()
+      setNotice({
+        tone: 'info',
+        message: 'Redirecting to Google to connect Gmail...',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Connect Gmail', error)
+      setIsConnectingGmail(false)
+    }
+  }
+
+  async function handleDisconnectGmail() {
+    setIsDisconnectingGmail(true)
+
+    try {
+      await disconnectGmailAccount()
+      await refreshGmailConnection(false)
+      setNotice({
+        tone: 'info',
+        message: 'Gmail disconnected. Follow-ups will open as email drafts again.',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Disconnect Gmail', error)
+    } finally {
+      setIsDisconnectingGmail(false)
+    }
+  }
+
   function handleLandingAuthCta(nextMode: AuthMode) {
     setAuthMode(nextMode)
     window.setTimeout(() => {
@@ -929,6 +1053,7 @@ function App() {
       setSession(null)
       setAppState(null)
       setSettingsForm(null)
+      setGmailConnection(null)
       setNotice({
         tone: 'info',
         message: 'Password recovery was canceled. You can log in again when ready.',
@@ -948,6 +1073,7 @@ function App() {
       setSession(null)
       setAppState(null)
       setSettingsForm(null)
+      setGmailConnection(null)
       setNotice({
         tone: 'info',
         message: 'You have been signed out.',
@@ -966,7 +1092,9 @@ function App() {
     setIsSubmittingClient(true)
 
     try {
-      const response = await webApp.createClient(clientForm)
+      const response = await webApp.createClient(clientForm, {
+        preferGmail: gmailConnection?.connected ?? false,
+      })
       applyOperationResponse(response, false)
       setClientForm(createInitialClientForm())
     } catch (error) {
@@ -1026,7 +1154,9 @@ function App() {
     setIsProcessingQueue(true)
 
     try {
-      const response = await webApp.processDueFollowUps()
+      const response = await webApp.processDueFollowUps({
+        preferGmail: gmailConnection?.connected ?? false,
+      })
       applyOperationResponse(response, false)
     } catch (error) {
       setNotice({
@@ -1043,7 +1173,9 @@ function App() {
     setBusyClientId(clientId)
 
     try {
-      const response = await webApp.sendClientFollowUp(clientId)
+      const response = await webApp.sendClientFollowUp(clientId, {
+        preferGmail: gmailConnection?.connected ?? false,
+      })
       applyOperationResponse(response, false)
     } catch (error) {
       setNotice({
@@ -1957,14 +2089,17 @@ function App() {
             <div className="dashboard-card-header">
               <div>
                 <span className="eyebrow">Email drafts</span>
-                <h2>Draft queue</h2>
+                <h2>{gmailConnection?.connected ? 'Gmail sending' : 'Draft queue'}</h2>
               </div>
-              <span className="section-count">{appState.stats.dueNow}</span>
+              <span className={`section-count ${gmailConnection?.connected ? 'gmail-connected-count' : ''}`}>
+                {gmailConnection?.connected ? 'Gmail' : appState.stats.dueNow}
+              </span>
             </div>
 
             <p className="dashboard-card-copy">
-              Email sending stays exactly as before: the app opens a prepared `mailto:` draft in
-              your default mail app.
+              {gmailConnection?.connected
+                ? `Connected as ${gmailConnection.email}. Follow-ups will send through Gmail API from that account.`
+                : 'Email sending stays exactly as before: the app opens a prepared `mailto:` draft in your default mail app until Gmail is connected.'}
             </p>
 
             <button
@@ -1973,7 +2108,13 @@ function App() {
               onClick={() => void handleProcessQueue()}
               type="button"
             >
-              {isProcessingQueue ? 'Opening next draft...' : 'Open next scheduled draft'}
+              {isProcessingQueue
+                ? gmailConnection?.connected
+                  ? 'Sending next follow-up...'
+                  : 'Opening next draft...'
+                : gmailConnection?.connected
+                  ? 'Send next scheduled email'
+                  : 'Open next scheduled draft'}
             </button>
           </article>
 
@@ -1982,6 +2123,47 @@ function App() {
               <div>
                 <span className="eyebrow">Settings</span>
                 <h2>Brand and workflow</h2>
+              </div>
+            </div>
+
+            <div className="gmail-connection-card">
+              <div>
+                <span className="eyebrow">Gmail sending</span>
+                <h3>{gmailConnection?.connected ? 'Gmail is connected' : 'Connect Gmail'}</h3>
+                <p>
+                  {gmailConnection?.connected
+                    ? `Emails will be sent from ${gmailConnection.email}. You can disconnect anytime.`
+                    : 'Let users authorize Gmail once so follow-up emails can send automatically from their own account.'}
+                </p>
+              </div>
+
+              <div className="gmail-connection-actions">
+                <button
+                  className="primary-button"
+                  disabled={isConnectingGmail || isCheckingGmailConnection || Boolean(gmailConnection?.connected)}
+                  onClick={() => void handleConnectGmail()}
+                  type="button"
+                >
+                  {isConnectingGmail ? 'Connecting...' : 'Connect Gmail'}
+                </button>
+                <button
+                  className="ghost-button"
+                  disabled={
+                    isDisconnectingGmail || isCheckingGmailConnection || !gmailConnection?.connected
+                  }
+                  onClick={() => void handleDisconnectGmail()}
+                  type="button"
+                >
+                  {isDisconnectingGmail ? 'Disconnecting...' : 'Disconnect'}
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={isCheckingGmailConnection}
+                  onClick={() => void refreshGmailConnection(true)}
+                  type="button"
+                >
+                  {isCheckingGmailConnection ? 'Checking...' : 'Refresh'}
+                </button>
               </div>
             </div>
 

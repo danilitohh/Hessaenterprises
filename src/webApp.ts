@@ -34,6 +34,23 @@ type Database = {
   clients: ClientRecord[]
 }
 
+type EmailDeliveryOptions = {
+  preferGmail?: boolean
+}
+
+type EmailDeliveryResult = {
+  detail: string
+  method: 'draft' | 'gmail'
+}
+
+type GmailSendFunctionResponse = {
+  fromEmail?: string
+  message?: string
+  messageId?: string
+  reason?: string
+  sent: boolean
+}
+
 function createDefaultTemplates() {
   return Array.from({ length: MAX_CONTACTS }, (_, index) => {
     const contactNumber = index + 1
@@ -652,6 +669,72 @@ function openMailDraft(recipient: string, subject: string, body: string) {
   window.location.href = createMailtoLink(recipient, subject, body)
 }
 
+async function sendWithConnectedGmail(
+  recipient: string,
+  subject: string,
+  body: string,
+  metadata: {
+    clientName: string
+    contactNumber: number
+    scheduledFor: string
+  },
+): Promise<EmailDeliveryResult | null> {
+  try {
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase.functions.invoke<GmailSendFunctionResponse>(
+      'gmail-send-followup',
+      {
+        body: {
+          body,
+          clientName: metadata.clientName,
+          contactNumber: metadata.contactNumber,
+          scheduledFor: metadata.scheduledFor,
+          subject,
+          to: recipient,
+        },
+      },
+    )
+
+    if (error || !data?.sent) {
+      return null
+    }
+
+    return {
+      detail: data.fromEmail ? `Sent through Gmail from ${data.fromEmail}.` : 'Sent through Gmail.',
+      method: 'gmail',
+    }
+  } catch {
+    return null
+  }
+}
+
+async function deliverFollowUpEmail(
+  recipient: string,
+  subject: string,
+  body: string,
+  metadata: {
+    clientName: string
+    contactNumber: number
+    preferGmail?: boolean
+    scheduledFor: string
+  },
+): Promise<EmailDeliveryResult> {
+  if (metadata.preferGmail) {
+    const gmailDelivery = await sendWithConnectedGmail(recipient, subject, body, metadata)
+
+    if (gmailDelivery) {
+      return gmailDelivery
+    }
+  }
+
+  openMailDraft(recipient, subject, body)
+
+  return {
+    detail: 'Opened as an email draft in the default mail app.',
+    method: 'draft',
+  }
+}
+
 function getRuntimeInfo(): RuntimeInfo {
   const userAgent = navigator.userAgent
   let browser = 'Current browser'
@@ -742,12 +825,20 @@ function selectClientsForProcessing(
   )
 }
 
-function advanceClientWithDraft(database: Database, client: ClientRecord) {
+async function advanceClientWithDraft(
+  database: Database,
+  client: ClientRecord,
+  options: EmailDeliveryOptions = {},
+) {
   const contactNumber = client.sentContacts + 1
   const scheduledFor = client.nextContactAt ?? new Date().toISOString()
   const payload = buildEmailPayload(client, database.settings, contactNumber, scheduledFor)
-
-  openMailDraft(client.email, payload.subject, payload.body)
+  const delivery = await deliverFollowUpEmail(client.email, payload.subject, payload.body, {
+    clientName: client.name,
+    contactNumber,
+    preferGmail: options.preferGmail,
+    scheduledFor,
+  })
 
   const preparedAt = new Date().toISOString()
   client.sentContacts = contactNumber
@@ -761,7 +852,7 @@ function advanceClientWithDraft(database: Database, client: ClientRecord) {
     scheduledFor,
     happenedAt: preparedAt,
     subject: payload.subject,
-    preview: payload.preview,
+    preview: delivery.method === 'gmail' ? delivery.detail : payload.preview,
     error: null,
   })
 
@@ -777,6 +868,8 @@ function advanceClientWithDraft(database: Database, client: ClientRecord) {
       database.settings.automation.intervalDays,
     )
   }
+
+  return delivery
 }
 
 function buildOperationResponse(
@@ -975,7 +1068,7 @@ export const webApp = {
     }
   },
 
-  async createClient(clientInput: ClientInput) {
+  async createClient(clientInput: ClientInput, options: EmailDeliveryOptions = {}) {
     const { session } = await requireSession()
     const name = clientInput.name.trim()
     const email = clientInput.email.trim().toLowerCase()
@@ -1034,7 +1127,7 @@ export const webApp = {
       new Date(client.nextContactAt).getTime() <= Date.now()
 
     if (shouldAutoOpen) {
-      return this.sendClientFollowUp(client.id)
+      return this.sendClientFollowUp(client.id, options)
     }
 
     return {
@@ -1048,7 +1141,7 @@ export const webApp = {
     }
   },
 
-  async processDueFollowUps() {
+  async processDueFollowUps(options: EmailDeliveryOptions = {}) {
     const { session } = await requireSession()
     const database = loadDatabaseForUser(session.user.id)
     const candidates = selectClientsForProcessing(database.clients)
@@ -1071,7 +1164,7 @@ export const webApp = {
       throw new Error('The next client in the queue could not be found.')
     }
 
-    advanceClientWithDraft(database, client)
+    const delivery = await advanceClientWithDraft(database, client, options)
     const persisted = persistDatabase(session.user.id, database)
     const remainingDue = selectClientsForProcessing(persisted.clients).length
     const suffix =
@@ -1082,11 +1175,11 @@ export const webApp = {
     return buildOperationResponse(
       persisted,
       session.user,
-      `Opened the next draft for ${client.name}.${suffix}`,
+      `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} the next follow-up for ${client.name}.${suffix}`,
     )
   },
 
-  async sendClientFollowUp(clientId: string) {
+  async sendClientFollowUp(clientId: string, options: EmailDeliveryOptions = {}) {
     if (!clientId) {
       throw new Error('A client must be selected before opening a draft.')
     }
@@ -1107,13 +1200,13 @@ export const webApp = {
       throw new Error('This client has already completed the full sequence.')
     }
 
-    advanceClientWithDraft(database, client)
+    const delivery = await advanceClientWithDraft(database, client, options)
     const persisted = persistDatabase(session.user.id, database)
 
     return buildOperationResponse(
       persisted,
       session.user,
-      `Opened touchpoint ${client.sentContacts} for ${client.name}.`,
+      `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} touchpoint ${client.sentContacts} for ${client.name}.`,
     )
   },
 

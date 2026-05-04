@@ -50,6 +50,14 @@ Para validar el candado de auth:
 npm run check:auth-config
 ```
 
+## Gmail Sending
+
+La app incluye una integracion para que cada usuario conecte Gmail y los follow-ups puedan enviarse desde su propia cuenta.
+
+El flujo seguro usa OAuth + Supabase Edge Functions. Si Gmail no esta conectado, la app mantiene el comportamiento actual y abre el borrador con `mailto:`.
+
+Consulta `GMAIL_INTEGRATION.md` antes de desplegar o cambiar esta integracion.
+
 ## Build
 
 ```bash
