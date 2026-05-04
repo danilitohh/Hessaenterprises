@@ -1,4 +1,10 @@
 import { startTransition, useEffect, useEffectEvent, useRef, useState, type FormEvent } from 'react'
+import appointmentManagementIcon from './assets/landing-icons/appointment-management.png?url&no-inline'
+import browserAccessIcon from './assets/landing-icons/browser-access.png?url&no-inline'
+import clientHistoryIcon from './assets/landing-icons/client-history.png?url&no-inline'
+import emailFollowUpIcon from './assets/landing-icons/email-follow-up.png?url&no-inline'
+import perUserWorkspaceIcon from './assets/landing-icons/per-user-workspace.png?url&no-inline'
+import proposalPipelineIcon from './assets/landing-icons/proposal-pipeline.png?url&no-inline'
 import logoWordmark from './assets/logo-wordmark.png'
 import type {
   AppOperationResponse,
@@ -196,26 +202,32 @@ const proposalStatuses = ['Sent', 'Pending', 'Approved', 'Declined']
 
 const landingFeatures = [
   {
+    icon: emailFollowUpIcon,
     title: 'Email follow-up tracking',
     description: 'See every next email, due date, and prepared message before a client goes cold.',
   },
   {
+    icon: appointmentManagementIcon,
     title: 'Appointment management',
     description: 'Keep reminders visible for walkthroughs, calls, consultations, and site visits.',
   },
   {
+    icon: proposalPipelineIcon,
     title: 'Proposal pipeline',
     description: 'Track proposal movement from sent to pending, approved, declined, or ready to revive.',
   },
   {
+    icon: perUserWorkspaceIcon,
     title: 'Per-user workspace',
     description: 'Each account gets its own clients, notes, follow-up sequences, and settings.',
   },
   {
+    icon: clientHistoryIcon,
     title: 'Client history',
     description: 'Keep context, notes, outreach attempts, and next steps in one organized timeline.',
   },
   {
+    icon: browserAccessIcon,
     title: 'Browser-based access',
     description: 'Open the workspace from the web without a desktop install or complicated setup.',
   },
@@ -830,7 +842,7 @@ function App() {
               <div className="landing-feature-grid">
                 {landingFeatures.map((feature) => (
                   <article className="home-feature-item landing-feature-card" key={feature.title}>
-                    <span className="feature-card-mark"></span>
+                    <img alt="" aria-hidden="true" className="feature-card-mark" src={feature.icon} />
                     <strong>{feature.title}</strong>
                     <span>{feature.description}</span>
                   </article>
