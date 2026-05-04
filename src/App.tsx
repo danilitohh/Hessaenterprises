@@ -146,6 +146,23 @@ function getAuthSubmitLabel(authMode: AuthMode, isAuthenticating: boolean) {
   return authMode === 'login' ? 'Log in' : 'Create account'
 }
 
+function getInitialAuthMode(): AuthMode {
+  if (typeof window === 'undefined') {
+    return 'login'
+  }
+
+  return new URLSearchParams(window.location.search).get('auth') === 'reset-password'
+    ? 'reset-password'
+    : 'login'
+}
+
+function clearAuthRecoveryUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('auth')
+  url.hash = ''
+  window.history.replaceState({}, document.title, url.toString())
+}
+
 function formatDateTime(isoDate: string | null) {
   if (!isoDate) {
     return 'Pending'
@@ -305,7 +322,7 @@ function App() {
   const [clientForm, setClientForm] = useState<ClientInput>(() => createInitialClientForm())
   const [authForm, setAuthForm] = useState<AuthFormState>(() => createInitialAuthForm())
   const [settingsForm, setSettingsForm] = useState<SettingsFormState | null>(null)
-  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [authMode, setAuthMode] = useState<AuthMode>(() => getInitialAuthMode())
   const [notice, setNotice] = useState<Notice | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([])
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false)
@@ -590,6 +607,8 @@ function App() {
         const result = await webApp.updatePassword(payload)
 
         setAuthForm(createInitialAuthForm())
+        setAuthMode('login')
+        clearAuthRecoveryUrl()
         setNotice({
           tone: 'success',
           message: result.message,
@@ -597,8 +616,6 @@ function App() {
 
         if (result.session) {
           setSession(result.session)
-        } else {
-          setAuthMode('login')
         }
       } else if (authMode === 'register') {
         const payload: RegisterInput = {
@@ -674,6 +691,33 @@ function App() {
         block: 'start',
       })
     }, 0)
+  }
+
+  async function handleRecoveryExit() {
+    clearAuthRecoveryUrl()
+    setAuthForm(createInitialAuthForm())
+    setAuthMode('login')
+
+    if (!session) {
+      return
+    }
+
+    try {
+      await webApp.logout()
+      setSession(null)
+      setAppState(null)
+      setSettingsForm(null)
+      setNotice({
+        tone: 'info',
+        message: 'Password recovery was canceled. You can log in again when ready.',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Cancel password recovery', error)
+    }
   }
 
   async function handleLogout() {
@@ -903,6 +947,90 @@ function App() {
     </aside>
   )
 
+  if (authMode === 'reset-password') {
+    return (
+      <main className="crm-shell recovery-shell">
+        {diagnosticsPanel}
+        <section className="recovery-layout">
+          <article className="panel recovery-brand-card">
+            <div className="landing-brand-lockup">
+              <img alt="Hessa Enterprises" className="landing-logo" src={logoWordmark} />
+              <span className="eyebrow">Secure account recovery</span>
+            </div>
+
+            <div className="recovery-copy">
+              <span className="brand-caption">Password reset</span>
+              <h1>Create a new password for your workspace.</h1>
+              <p className="lede">
+                This page opens from the secure reset link in your email. Choose a new password
+                before continuing to your client follow-up workspace.
+              </p>
+            </div>
+
+            <div className="recovery-card-list" aria-label="Recovery safeguards">
+              <div>
+                <strong>Private reset session</strong>
+                <span>Supabase verifies the reset link before accepting a new password.</span>
+              </div>
+              <div>
+                <strong>Minimum 8 characters</strong>
+                <span>Use a password that is unique to this account.</span>
+              </div>
+            </div>
+          </article>
+
+          <article className="panel auth-card recovery-auth-card">
+            <div className="auth-card-header">
+              <span className="eyebrow">New password</span>
+              <h2>{getAuthTitle(authMode)}</h2>
+              <p>{getAuthDescription(authMode)}</p>
+            </div>
+
+            {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
+
+            <form className="stack-form" onSubmit={handleAuthSubmit}>
+              <label className="field">
+                <span>New password</span>
+                <input
+                  autoComplete="new-password"
+                  minLength={8}
+                  onChange={(event) =>
+                    setAuthForm((current) => ({ ...current, password: event.target.value }))
+                  }
+                  placeholder="Minimum 8 characters"
+                  required
+                  type="password"
+                  value={authForm.password}
+                />
+              </label>
+
+              <button
+                className="primary-button full-width"
+                disabled={isAuthenticating}
+                type="submit"
+              >
+                {getAuthSubmitLabel(authMode, isAuthenticating)}
+              </button>
+            </form>
+
+            <button
+              className="auth-link-button"
+              onClick={() => void handleRecoveryExit()}
+              type="button"
+            >
+              Back to log in
+            </button>
+
+            <p className="recovery-security-note">
+              If this link was opened by mistake, go back to log in and request a new reset email
+              when needed.
+            </p>
+          </article>
+        </section>
+      </main>
+    )
+  }
+
   if (!session) {
     return (
       <main className="crm-shell landing-shell">
@@ -1092,24 +1220,22 @@ function App() {
               <p>{getAuthDescription(authMode)}</p>
             </div>
 
-            {authMode === 'reset-password' ? null : (
-              <div className="auth-toggle">
-                <button
-                  className={`auth-toggle-button ${authMode === 'login' || authMode === 'forgot-password' ? 'auth-toggle-button-active' : ''}`}
-                  onClick={() => setAuthMode('login')}
-                  type="button"
-                >
-                  Log in
-                </button>
-                <button
-                  className={`auth-toggle-button ${authMode === 'register' ? 'auth-toggle-button-active' : ''}`}
-                  onClick={() => setAuthMode('register')}
-                  type="button"
-                >
-                  Register
-                </button>
-              </div>
-            )}
+            <div className="auth-toggle">
+              <button
+                className={`auth-toggle-button ${authMode === 'login' || authMode === 'forgot-password' ? 'auth-toggle-button-active' : ''}`}
+                onClick={() => setAuthMode('login')}
+                type="button"
+              >
+                Log in
+              </button>
+              <button
+                className={`auth-toggle-button ${authMode === 'register' ? 'auth-toggle-button-active' : ''}`}
+                onClick={() => setAuthMode('register')}
+                type="button"
+              >
+                Register
+              </button>
+            </div>
 
             {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
 
@@ -1152,24 +1278,22 @@ function App() {
                 </label>
               ) : null}
 
-              {authMode === 'reset-password' ? null : (
-                <label className="field">
-                  <span>Email address</span>
-                  <input
-                    onChange={(event) =>
-                      setAuthForm((current) => ({ ...current, email: event.target.value }))
-                    }
-                    placeholder="you@company.com"
-                    required
-                    type="email"
-                    value={authForm.email}
-                  />
-                </label>
-              )}
+              <label className="field">
+                <span>Email address</span>
+                <input
+                  onChange={(event) =>
+                    setAuthForm((current) => ({ ...current, email: event.target.value }))
+                  }
+                  placeholder="you@company.com"
+                  required
+                  type="email"
+                  value={authForm.email}
+                />
+              </label>
 
               {authMode === 'forgot-password' ? null : (
                 <label className="field">
-                  <span>{authMode === 'reset-password' ? 'New password' : 'Password'}</span>
+                  <span>Password</span>
                   <input
                     minLength={8}
                     onChange={(event) =>
@@ -1193,7 +1317,7 @@ function App() {
                 </button>
               ) : null}
 
-              {authMode === 'forgot-password' || authMode === 'reset-password' ? (
+              {authMode === 'forgot-password' ? (
                 <button
                   className="auth-link-button"
                   onClick={() => setAuthMode('login')}

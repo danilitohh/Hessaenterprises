@@ -645,6 +645,79 @@
   scroll-margin-top: 24px;
 }
 
+.recovery-shell {
+  min-height: 100vh;
+  display: grid;
+  align-items: center;
+}
+
+.recovery-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.72fr);
+  gap: 22px;
+  align-items: stretch;
+}
+
+.recovery-brand-card {
+  display: grid;
+  gap: 30px;
+  align-content: space-between;
+  padding: 42px;
+  min-height: 620px;
+  background:
+    radial-gradient(circle at 10% 8%, rgba(86, 127, 171, 0.14), transparent 28%),
+    radial-gradient(circle at 92% 10%, rgba(185, 138, 74, 0.16), transparent 25%),
+    linear-gradient(145deg, rgba(255, 253, 248, 0.96), rgba(246, 239, 229, 0.94));
+}
+
+.recovery-copy {
+  position: relative;
+  z-index: 1;
+  max-width: 780px;
+}
+
+.recovery-copy h1 {
+  max-width: 820px;
+  margin: 12px 0 18px;
+  color: var(--ink-strong);
+  font-size: clamp(3rem, 7vw, 7.5rem);
+  line-height: 0.92;
+  letter-spacing: -0.07em;
+}
+
+.recovery-card-list {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.recovery-card-list div {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.recovery-card-list strong {
+  color: var(--ink-strong);
+}
+
+.recovery-card-list span,
+.recovery-security-note {
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.recovery-auth-card {
+  justify-content: stretch;
+  align-content: center;
+  padding: 38px;
+}
+
 .home-feature-list {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
@@ -1488,12 +1561,14 @@
 @media (max-width: 1240px) {
   .landing-hero-grid,
   .landing-content-grid,
+  .recovery-layout,
   .investment-panel {
     grid-template-columns: 1fr;
   }
 
   .landing-hero-grid,
-  .landing-hero-panel {
+  .landing-hero-panel,
+  .recovery-brand-card {
     min-height: auto;
   }
 
@@ -1507,6 +1582,7 @@
 @media (max-width: 1120px) {
   .landing-hero-grid,
   .landing-content-grid,
+  .recovery-layout,
   .investment-panel,
   .field-row,
   .schedule-board,
@@ -1537,11 +1613,13 @@
   .brand-stage-footer h2,
   .home-hero-copy h1,
   .landing-hero-copy h1,
+  .recovery-copy h1,
   .hero-brief h1 {
     max-width: 100%;
   }
 
-  .landing-hero-panel {
+  .landing-hero-panel,
+  .recovery-brand-card {
     min-height: auto;
   }
 
@@ -1570,6 +1648,7 @@
   .brand-stage,
   .home-hero,
   .landing-hero-panel,
+  .recovery-brand-card,
   .dashboard-preview-card,
   .how-it-works-panel,
   .investment-panel,
@@ -1598,6 +1677,7 @@
   .auth-toggle,
   .home-feature-list,
   .landing-feature-grid,
+  .recovery-card-list,
   .preview-metric-grid,
   .how-step-grid,
   .metric-ribbon,
