@@ -7,6 +7,7 @@
 .landing-shell {
   display: grid;
   gap: 24px;
+  width: min(1760px, calc(100vw - 32px));
 }
 
 .auth-layout {
@@ -80,13 +81,14 @@
 }
 
 .landing-hero-grid {
-  grid-template-columns: minmax(0, 1.02fr) minmax(420px, 0.98fr);
+  grid-template-columns: minmax(620px, 1.15fr) minmax(520px, 0.85fr);
   gap: 22px;
   align-items: stretch;
+  min-height: calc(100vh - 136px);
 }
 
 .landing-content-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 460px);
   gap: 22px;
   align-items: start;
 }
@@ -155,7 +157,7 @@
 .landing-hero-panel {
   display: grid;
   gap: 30px;
-  min-height: 560px;
+  min-height: 640px;
   align-content: center;
   background:
     radial-gradient(circle at 8% 10%, rgba(86, 127, 171, 0.16), transparent 28%),
@@ -296,16 +298,16 @@
   z-index: 1;
   display: grid;
   gap: 16px;
-  max-width: 54rem;
+  max-width: 68rem;
 }
 
 .landing-hero-copy h1 {
-  max-width: 12.5ch;
-  font-size: clamp(3rem, 5.7vw, 6.35rem);
+  max-width: 15.5ch;
+  font-size: clamp(3.2rem, 5.15vw, 6.15rem);
 }
 
 .landing-hero-copy p {
-  max-width: 44rem;
+  max-width: 56rem;
   color: var(--ink-soft);
   line-height: 1.75;
 }
@@ -1309,6 +1311,25 @@
   .home-feature-list,
   .metric-ribbon {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1240px) {
+  .landing-hero-grid,
+  .landing-content-grid,
+  .investment-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-hero-grid,
+  .landing-hero-panel {
+    min-height: auto;
+  }
+
+  .landing-auth-card {
+    order: -1;
+    position: relative;
+    top: auto;
   }
 }
 
