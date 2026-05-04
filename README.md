@@ -22,28 +22,33 @@ npm run dev
 
 La app usa Supabase Auth para registro, inicio de sesion, Google OAuth y recuperacion de contrasena.
 
-1. Crea un proyecto en Supabase.
-2. Copia `Project URL` y `anon public key` desde `Project Settings > API`.
-3. Crea `.env.local` basado en `.env.example`.
-4. En Supabase, agrega tus URLs en `Authentication > URL Configuration`.
-5. Reinicia el servidor de Vite.
+La configuracion de auth ya esta funcionando y esta protegida por un candado de build. Antes de cambiar URLs, claves o providers, lee `AUTH_LOCK.md`.
+
+Proyecto Supabase actual:
 
 ```bash
-VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
-VITE_SUPABASE_ANON_KEY=tu-anon-key
+VITE_SUPABASE_URL=https://eaocwrgbqeakyycmtbah.supabase.co
+VITE_SUPABASE_ANON_KEY=tu-publishable-o-anon-public-key
 ```
 
-URLs recomendadas para desarrollo:
+No uses `/rest/v1/` al final de `VITE_SUPABASE_URL`.
 
-- `Site URL`: `http://localhost:5173`
-- `Redirect URLs`: `http://localhost:5173`, `http://localhost:5173/**`
+URLs requeridas en Supabase `Authentication > URL Configuration`:
 
-Para Vercel agrega tambien tu dominio de produccion, por ejemplo:
+- `Site URL`: `https://hessaenterprises.vercel.app`
+- `Redirect URLs`: `https://hessaenterprises.vercel.app`, `https://hessaenterprises.vercel.app/**`
 
-- `https://hessaenterprises.vercel.app`
-- `https://hessaenterprises.vercel.app/**`
+Google OAuth debe usar el callback de Supabase:
 
-Para activar Google, configura el proveedor en `Authentication > Providers > Google` dentro de Supabase.
+- `https://eaocwrgbqeakyycmtbah.supabase.co/auth/v1/callback`
+
+Nunca pongas el Google client secret en el frontend. Ese secreto solo va en Supabase `Authentication > Sign In / Providers > Google`.
+
+Para validar el candado de auth:
+
+```bash
+npm run check:auth-config
+```
 
 ## Build
 

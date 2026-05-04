@@ -6,11 +6,12 @@
   "author": "Hessa Enterprises",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "check:auth-config": "node scripts/check-auth-config.mjs",
+    "dev": "npm run check:auth-config && vite",
+    "build": "npm run check:auth-config && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "vite"
+    "start": "npm run check:auth-config && vite"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.1",
