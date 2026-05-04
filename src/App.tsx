@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useEffectEvent, useState, type FormEvent } from 'react'
+import { startTransition, useEffect, useEffectEvent, useRef, useState, type FormEvent } from 'react'
 import logoWordmark from './assets/logo-wordmark.png'
 import type {
   AppOperationResponse,
@@ -8,6 +8,7 @@ import type {
   ClientRecord,
   ClientStatus,
   EmailTemplate,
+  GoogleAuthInput,
   LoginInput,
   RegisterInput,
   SettingsInput,
@@ -18,7 +19,49 @@ import './App.css'
 
 const MAX_CONTACTS = 4
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
+const GOOGLE_SCRIPT_SRC = 'https://accounts.google.com/gsi/client'
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? ''
 const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
+
+type GoogleCredentialResponse = {
+  credential?: string
+  select_by?: string
+  state?: string
+}
+
+type GoogleButtonText = 'continue_with' | 'signin_with' | 'signup_with' | 'signin'
+
+type GoogleButtonOptions = {
+  shape?: 'pill' | 'rectangular' | 'circle' | 'square'
+  size?: 'large' | 'medium' | 'small'
+  text?: GoogleButtonText
+  theme?: 'outline' | 'filled_blue' | 'filled_black'
+  type?: 'standard' | 'icon'
+  width?: number
+}
+
+type GoogleIdentityApi = {
+  disableAutoSelect: () => void
+  initialize: (configuration: {
+    auto_select?: boolean
+    callback: (response: GoogleCredentialResponse) => void
+    client_id: string
+  }) => void
+  renderButton: (parent: HTMLElement, options: GoogleButtonOptions) => void
+}
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        id?: GoogleIdentityApi
+      }
+    }
+  }
+}
+
+let activeGoogleCredentialHandler: ((response: GoogleCredentialResponse) => void) | null = null
+let initializedGoogleClientId: string | null = null
 
 type Notice = {
   tone: 'error' | 'info' | 'success'
@@ -156,6 +199,7 @@ const templateTokens = [
 ]
 
 function App() {
+  const googleButtonRef = useRef<HTMLDivElement | null>(null)
   const [session, setSession] = useState<AuthSession | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [clientForm, setClientForm] = useState<ClientInput>(() => createInitialClientForm())
@@ -165,6 +209,8 @@ function App() {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [loading, setLoading] = useState(true)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const [isGoogleAuthenticating, setIsGoogleAuthenticating] = useState(false)
+  const [isGoogleReady, setIsGoogleReady] = useState(() => Boolean(window.google?.accounts?.id))
   const [isSubmittingClient, setIsSubmittingClient] = useState(false)
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [isProcessingQueue, setIsProcessingQueue] = useState(false)
@@ -213,6 +259,50 @@ function App() {
     }
   })
 
+  const handleGoogleCredential = useEffectEvent(async (response: GoogleCredentialResponse) => {
+    if (!GOOGLE_CLIENT_ID) {
+      setNotice({
+        tone: 'error',
+        message: 'Google sign-in needs a Google client ID before it can be used.',
+      })
+      return
+    }
+
+    if (!response.credential) {
+      setNotice({
+        tone: 'error',
+        message: 'Google sign-in did not return an account credential. Please try again.',
+      })
+      return
+    }
+
+    setIsGoogleAuthenticating(true)
+
+    try {
+      const payload: GoogleAuthInput = {
+        clientId: GOOGLE_CLIENT_ID,
+        credential: response.credential,
+      }
+      const nextSession = await webApp.continueWithGoogle(payload)
+
+      setAuthForm(createInitialAuthForm())
+      setSession(nextSession)
+      setNotice({
+        tone: 'success',
+        message: nextSession.isNewUser
+          ? 'Google account connected. Your workspace is ready.'
+          : 'Signed in with Google successfully.',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+    } finally {
+      setIsGoogleAuthenticating(false)
+    }
+  })
+
   useEffect(() => {
     const boot = async () => {
       try {
@@ -230,6 +320,93 @@ function App() {
 
     void boot()
   }, [])
+
+  useEffect(() => {
+    if (session || !GOOGLE_CLIENT_ID) {
+      return
+    }
+
+    if (window.google?.accounts?.id) {
+      const readyTimer = window.setTimeout(() => {
+        setIsGoogleReady(true)
+      }, 0)
+
+      return () => {
+        window.clearTimeout(readyTimer)
+      }
+    }
+
+    let isMounted = true
+    const existingScript = document.querySelector<HTMLScriptElement>(
+      `script[src="${GOOGLE_SCRIPT_SRC}"]`,
+    )
+    const script = existingScript ?? document.createElement('script')
+    const handleLoad = () => {
+      if (isMounted) {
+        setIsGoogleReady(Boolean(window.google?.accounts?.id))
+      }
+    }
+    const handleError = () => {
+      if (isMounted) {
+        setNotice({
+          tone: 'error',
+          message: 'Google sign-in could not load. Email and password sign-in still works.',
+        })
+      }
+    }
+
+    script.addEventListener('load', handleLoad)
+    script.addEventListener('error', handleError)
+
+    if (!existingScript) {
+      script.async = true
+      script.defer = true
+      script.src = GOOGLE_SCRIPT_SRC
+      document.head.appendChild(script)
+    }
+
+    return () => {
+      isMounted = false
+      script.removeEventListener('load', handleLoad)
+      script.removeEventListener('error', handleError)
+    }
+  }, [session])
+
+  useEffect(() => {
+    const googleIdentity = window.google?.accounts?.id
+    const buttonRoot = googleButtonRef.current
+
+    if (session || !GOOGLE_CLIENT_ID || !isGoogleReady || !googleIdentity || !buttonRoot) {
+      return
+    }
+
+    activeGoogleCredentialHandler = (response) => {
+      void handleGoogleCredential(response)
+    }
+
+    if (initializedGoogleClientId !== GOOGLE_CLIENT_ID) {
+      googleIdentity.initialize({
+        auto_select: false,
+        callback: (response) => activeGoogleCredentialHandler?.(response),
+        client_id: GOOGLE_CLIENT_ID,
+      })
+      initializedGoogleClientId = GOOGLE_CLIENT_ID
+    }
+
+    buttonRoot.innerHTML = ''
+    googleIdentity.renderButton(buttonRoot, {
+      shape: 'pill',
+      size: 'large',
+      text: authMode === 'register' ? 'signup_with' : 'signin_with',
+      theme: 'outline',
+      type: 'standard',
+      width: Math.max(240, Math.min(400, Math.floor(buttonRoot.getBoundingClientRect().width))),
+    })
+
+    return () => {
+      activeGoogleCredentialHandler = null
+    }
+  }, [authMode, isGoogleReady, session])
 
   useEffect(() => {
     if (!session) {
@@ -312,6 +489,7 @@ function App() {
   async function handleLogout() {
     try {
       await webApp.logout()
+      window.google?.accounts?.id?.disableAutoSelect()
       setSession(null)
       setAppState(null)
       setSettingsForm(null)
@@ -528,6 +706,42 @@ function App() {
             </div>
 
             {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
+
+            <div className="google-auth-section">
+              {GOOGLE_CLIENT_ID ? (
+                <>
+                  <div
+                    aria-label={
+                      authMode === 'login' ? 'Sign in with Google' : 'Sign up with Google'
+                    }
+                    className={`google-auth-button ${
+                      isGoogleAuthenticating ? 'google-auth-button-busy' : ''
+                    }`}
+                    ref={googleButtonRef}
+                  ></div>
+
+                  {!isGoogleReady ? (
+                    <button className="google-auth-loading" disabled type="button">
+                      Loading Google sign-in...
+                    </button>
+                  ) : null}
+                </>
+              ) : (
+                <button className="google-auth-loading" disabled type="button">
+                  Continue with Google
+                </button>
+              )}
+
+              <p className="google-auth-hint">
+                {GOOGLE_CLIENT_ID
+                  ? 'Use your Gmail or Google account. New users get a workspace automatically.'
+                  : 'Add VITE_GOOGLE_CLIENT_ID to enable Gmail account access.'}
+              </p>
+            </div>
+
+            <div className="auth-divider">
+              <span>or continue with email</span>
+            </div>
 
             <form className="stack-form" onSubmit={handleAuthSubmit}>
               {authMode === 'register' ? (

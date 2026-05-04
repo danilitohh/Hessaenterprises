@@ -18,6 +18,21 @@ npm install
 npm run dev
 ```
 
+## Acceso con Gmail / Google
+
+Para activar el boton de acceso con Google:
+
+1. Crea un OAuth Client ID de tipo `Web application` en Google Cloud.
+2. Agrega tus origenes autorizados, por ejemplo `http://localhost:5173` para desarrollo.
+3. Crea un archivo `.env.local` basado en `.env.example`.
+4. Reinicia el servidor de Vite.
+
+```bash
+VITE_GOOGLE_CLIENT_ID=tu-client-id.apps.googleusercontent.com
+```
+
+El acceso con Google crea automaticamente el usuario la primera vez y luego reutiliza el mismo workspace local.
+
 ## Build
 
 ```bash

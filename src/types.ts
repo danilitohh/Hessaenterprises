@@ -127,3 +127,12 @@ export type RegisterInput = {
   email: string
   password: string
 }
+
+export type GoogleAuthInput = {
+  clientId: string
+  credential: string
+}
+
+export type GoogleAuthSession = AuthSession & {
+  isNewUser: boolean
+}

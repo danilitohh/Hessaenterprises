@@ -6,6 +6,8 @@ import type {
   ClientInput,
   ClientRecord,
   FollowUpHistoryItem,
+  GoogleAuthInput,
+  GoogleAuthSession,
   LoginInput,
   RegisterInput,
   RuntimeInfo,
@@ -31,7 +33,8 @@ type Database = {
 }
 
 type StoredUser = AuthUser & {
-  passwordHash: string
+  googleSubject: string | null
+  passwordHash: string | null
 }
 
 type AuthStore = {
@@ -128,6 +131,76 @@ function isValidEmail(email: string) {
 
 function toStoredEmail(email: string) {
   return email.trim().toLowerCase()
+}
+
+function decodeBase64Url(value: string) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=')
+  const binary = window.atob(padded)
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
+function getStringClaim(payload: Record<string, unknown>, claim: string) {
+  const value = payload[claim]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function decodeGoogleCredential({ clientId, credential }: GoogleAuthInput) {
+  const [, encodedPayload] = credential.split('.')
+
+  if (!encodedPayload) {
+    throw new Error('Google sign-in returned an invalid credential.')
+  }
+
+  let payload: Record<string, unknown>
+
+  try {
+    const decodedPayload = JSON.parse(decodeBase64Url(encodedPayload))
+    payload =
+      decodedPayload && typeof decodedPayload === 'object'
+        ? (decodedPayload as Record<string, unknown>)
+        : Object.create(null)
+  } catch {
+    throw new Error('Google sign-in returned a credential we could not read.')
+  }
+
+  const issuer = getStringClaim(payload, 'iss')
+
+  if (issuer !== 'accounts.google.com' && issuer !== 'https://accounts.google.com') {
+    throw new Error('Google sign-in returned a credential from an unknown issuer.')
+  }
+
+  if (getStringClaim(payload, 'aud') !== clientId) {
+    throw new Error('Google sign-in was issued for a different app.')
+  }
+
+  if (typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now()) {
+    throw new Error('Google sign-in expired. Please try again.')
+  }
+
+  const googleSubject = getStringClaim(payload, 'sub')
+  const email = toStoredEmail(getStringClaim(payload, 'email'))
+  const name =
+    getStringClaim(payload, 'name') || getStringClaim(payload, 'given_name') || email.split('@')[0]
+
+  if (!googleSubject) {
+    throw new Error('Google sign-in did not include an account identifier.')
+  }
+
+  if (!isValidEmail(email)) {
+    throw new Error('Google sign-in did not include a valid email address.')
+  }
+
+  if (payload.email_verified !== true) {
+    throw new Error('Google sign-in did not verify this email address.')
+  }
+
+  return {
+    email,
+    googleSubject,
+    name,
+  }
 }
 
 function clampTargetContacts(value: unknown) {
@@ -382,10 +455,21 @@ function normalizeStoredUser(rawUser: unknown): StoredUser | null {
     !('email' in normalized) ||
     typeof normalized.email !== 'string' ||
     !('createdAt' in normalized) ||
-    typeof normalized.createdAt !== 'string' ||
-    !('passwordHash' in normalized) ||
-    typeof normalized.passwordHash !== 'string'
+    typeof normalized.createdAt !== 'string'
   ) {
+    return null
+  }
+
+  const passwordHash =
+    'passwordHash' in normalized && typeof normalized.passwordHash === 'string'
+      ? normalized.passwordHash
+      : null
+  const googleSubject =
+    'googleSubject' in normalized && typeof normalized.googleSubject === 'string'
+      ? normalized.googleSubject
+      : null
+
+  if (!passwordHash && !googleSubject) {
     return null
   }
 
@@ -394,7 +478,8 @@ function normalizeStoredUser(rawUser: unknown): StoredUser | null {
     name: normalized.name.trim(),
     email: toStoredEmail(normalized.email),
     createdAt: normalized.createdAt,
-    passwordHash: normalized.passwordHash,
+    googleSubject,
+    passwordHash,
   }
 }
 
@@ -915,6 +1000,7 @@ export const webApp = {
       name,
       email,
       createdAt,
+      googleSubject: null,
       passwordHash: await hashPassword(password),
     }
 
@@ -950,6 +1036,10 @@ export const webApp = {
       throw new Error('No account was found for this email.')
     }
 
+    if (!user.passwordHash) {
+      throw new Error('This account uses Google sign-in. Continue with Google instead.')
+    }
+
     const attemptedHash = await hashPassword(password)
 
     if (attemptedHash !== user.passwordHash) {
@@ -964,6 +1054,56 @@ export const webApp = {
     }
 
     return {
+      user: toPublicUser(user),
+    }
+  },
+
+  async continueWithGoogle(googleInput: GoogleAuthInput): Promise<GoogleAuthSession> {
+    const googleAccount = decodeGoogleCredential(googleInput)
+    const authStore = loadAuthStore()
+    const userBySubject = authStore.users.find(
+      (item) => item.googleSubject === googleAccount.googleSubject,
+    )
+    const userByEmail = authStore.users.find((item) => item.email === googleAccount.email)
+
+    if (userBySubject && userByEmail && userBySubject.id !== userByEmail.id) {
+      throw new Error('This Google account conflicts with another saved user.')
+    }
+
+    let isNewUser = false
+    let user = userBySubject ?? userByEmail
+
+    if (!user) {
+      isNewUser = true
+      user = {
+        id: createId(),
+        name: googleAccount.name,
+        email: googleAccount.email,
+        createdAt: new Date().toISOString(),
+        googleSubject: googleAccount.googleSubject,
+        passwordHash: null,
+      }
+      authStore.users.push(user)
+    } else if (user.googleSubject && user.googleSubject !== googleAccount.googleSubject) {
+      throw new Error('This email is already connected to a different Google account.')
+    } else {
+      user.googleSubject = googleAccount.googleSubject
+      user.email = googleAccount.email
+
+      if (!user.name.trim()) {
+        user.name = googleAccount.name
+      }
+    }
+
+    authStore.sessionUserId = user.id
+    saveAuthStore(authStore)
+
+    if (authStore.users.length === 1) {
+      migrateLegacyWorkspaceToUser(user.id)
+    }
+
+    return {
+      isNewUser,
       user: toPublicUser(user),
     }
   },
