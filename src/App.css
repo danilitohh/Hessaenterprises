@@ -1397,12 +1397,20 @@
   align-items: start;
 }
 
+.dashboard-workspace [hidden] {
+  display: none !important;
+}
+
 .dashboard-primary-grid {
   grid-template-columns: minmax(0, 1.42fr) minmax(340px, 0.72fr);
 }
 
 .dashboard-operations-grid {
   grid-template-columns: minmax(320px, 0.74fr) minmax(0, 1.26fr);
+}
+
+.dashboard-single-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .client-workspace-grid {

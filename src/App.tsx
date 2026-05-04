@@ -51,6 +51,14 @@ type DiagnosticEntry = {
 }
 
 type AuthMode = 'forgot-password' | 'login' | 'register' | 'reset-password'
+type DashboardPageId =
+  | 'clients'
+  | 'dashboard'
+  | 'email-drafts'
+  | 'follow-ups'
+  | 'proposals'
+  | 'settings'
+  | 'templates'
 
 type AuthFormState = {
   email: string
@@ -420,7 +428,7 @@ const templateTokens = [
   '{{scheduledTime}}',
 ]
 
-const dashboardNavItems = [
+const dashboardNavItems: Array<{ href: DashboardPageId; label: string }> = [
   { href: 'dashboard', label: 'Dashboard' },
   { href: 'clients', label: 'Clients' },
   { href: 'proposals', label: 'Proposals' },
@@ -429,6 +437,29 @@ const dashboardNavItems = [
   { href: 'templates', label: 'Templates' },
   { href: 'settings', label: 'Settings' },
 ]
+
+const dashboardPageIds = new Set<DashboardPageId>(dashboardNavItems.map((item) => item.href))
+
+function getInitialDashboardPage(): DashboardPageId {
+  if (typeof window === 'undefined') {
+    return 'dashboard'
+  }
+
+  const hashPage = window.location.hash.replace('#', '') as DashboardPageId
+  return dashboardPageIds.has(hashPage) ? hashPage : 'dashboard'
+}
+
+function getDashboardPageForSection(sectionId: string): DashboardPageId {
+  if (sectionId === 'new-client' || sectionId.startsWith('client-record-')) {
+    return 'clients'
+  }
+
+  if (dashboardPageIds.has(sectionId as DashboardPageId)) {
+    return sectionId as DashboardPageId
+  }
+
+  return 'dashboard'
+}
 
 function getInitials(name: string) {
   return name
@@ -628,6 +659,9 @@ function App() {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([])
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false)
+  const [activeDashboardPage, setActiveDashboardPage] = useState<DashboardPageId>(() =>
+    getInitialDashboardPage(),
+  )
   const [dashboardSearch, setDashboardSearch] = useState('')
   const [gmailConnection, setGmailConnection] = useState<GmailConnectionStatus | null>(null)
   const [isCheckingGmailConnection, setIsCheckingGmailConnection] = useState(false)
@@ -844,6 +878,18 @@ function App() {
       setIsProcessingProposalQueue(false)
     }
   })
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActiveDashboardPage(getInitialDashboardPage())
+    }
+
+    window.addEventListener('hashchange', handleHashChange)
+
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange)
+    }
+  }, [])
 
   useEffect(() => {
     const handleWindowError = (event: ErrorEvent) => {
@@ -1200,11 +1246,31 @@ function App() {
     }, 0)
   }
 
+  function openDashboardPage(pageId: DashboardPageId, targetId: string = pageId) {
+    setActiveDashboardPage(pageId)
+
+    const nextUrl = new URL(window.location.href)
+    nextUrl.hash = pageId
+    window.history.replaceState({}, document.title, nextUrl.toString())
+
+    window.setTimeout(() => {
+      if (targetId !== pageId) {
+        document.getElementById(targetId)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+        return
+      }
+
+      document.querySelector('.dashboard-workspace')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }, 0)
+  }
+
   function scrollToDashboardSection(sectionId: string) {
-    document.getElementById(sectionId)?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start',
-    })
+    openDashboardPage(getDashboardPageForSection(sectionId), sectionId)
   }
 
   async function handleRecoveryExit() {
@@ -2163,9 +2229,13 @@ function App() {
         <nav className="sidebar-nav" aria-label="Workspace navigation">
           {dashboardNavItems.map((item) => (
             <button
-              className={item.href === 'dashboard' ? 'sidebar-nav-item sidebar-nav-item-active' : 'sidebar-nav-item'}
+              className={
+                item.href === activeDashboardPage
+                  ? 'sidebar-nav-item sidebar-nav-item-active'
+                  : 'sidebar-nav-item'
+              }
               key={item.href}
-              onClick={() => scrollToDashboardSection(item.href)}
+              onClick={() => openDashboardPage(item.href)}
               type="button"
             >
               <span>{item.label}</span>
@@ -2219,7 +2289,11 @@ function App() {
 
         {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
 
-        <section className="dashboard-overview" id="dashboard">
+        <section
+          className="dashboard-overview"
+          hidden={activeDashboardPage !== 'dashboard'}
+          id="dashboard"
+        >
           <div className="dashboard-heading">
             <div>
               <span className="eyebrow">Hessa Enterprises</span>
@@ -2248,8 +2322,19 @@ function App() {
           </div>
         </section>
 
-        <section className="dashboard-primary-grid">
-          <article className="dashboard-card followup-dashboard-card" id="follow-ups">
+        <section
+          className={`dashboard-primary-grid ${
+            activeDashboardPage === 'dashboard' || activeDashboardPage === 'follow-ups'
+              ? 'dashboard-single-grid'
+              : ''
+          }`}
+          hidden={activeDashboardPage !== 'dashboard' && activeDashboardPage !== 'follow-ups'}
+        >
+          <article
+            className="dashboard-card followup-dashboard-card"
+            hidden={activeDashboardPage !== 'follow-ups'}
+            id="follow-ups"
+          >
             <div className="dashboard-card-header">
               <div>
                 <span className="eyebrow">Follow-ups</span>
@@ -2359,7 +2444,7 @@ function App() {
             )}
           </article>
 
-          <div className="dashboard-side-stack">
+          <div className="dashboard-side-stack" hidden={activeDashboardPage !== 'dashboard'}>
             <article className="dashboard-card">
               <div className="dashboard-card-header">
                 <div>
@@ -2420,7 +2505,11 @@ function App() {
           </div>
         </section>
 
-        <section className="dashboard-card proposal-workspace-card" id="proposals">
+        <section
+          className="dashboard-card proposal-workspace-card"
+          hidden={activeDashboardPage !== 'proposals'}
+          id="proposals"
+        >
           <div className="dashboard-card-header">
             <div>
               <span className="eyebrow">Proposals</span>
@@ -2701,8 +2790,15 @@ function App() {
           </div>
         </section>
 
-        <section className="dashboard-operations-grid">
-          <article className="dashboard-card" id="email-drafts">
+        <section
+          className="dashboard-operations-grid dashboard-single-grid"
+          hidden={activeDashboardPage !== 'email-drafts' && activeDashboardPage !== 'settings'}
+        >
+          <article
+            className="dashboard-card"
+            hidden={activeDashboardPage !== 'email-drafts'}
+            id="email-drafts"
+          >
             <div className="dashboard-card-header">
               <div>
                 <span className="eyebrow">Email drafts</span>
@@ -2751,7 +2847,11 @@ function App() {
             </div>
           </article>
 
-          <article className="dashboard-card" id="settings">
+          <article
+            className="dashboard-card"
+            hidden={activeDashboardPage !== 'settings'}
+            id="settings"
+          >
             <div className="dashboard-card-header">
               <div>
                 <span className="eyebrow">Settings</span>
@@ -2870,7 +2970,7 @@ function App() {
           </article>
         </section>
 
-        <section className="dashboard-card" id="clients">
+        <section className="dashboard-card" hidden={activeDashboardPage !== 'clients'} id="clients">
           <div className="dashboard-card-header">
             <div>
               <span className="eyebrow">Clients</span>
@@ -3118,7 +3218,11 @@ function App() {
           </div>
         </section>
 
-        <section className="dashboard-card" id="templates">
+        <section
+          className="dashboard-card"
+          hidden={activeDashboardPage !== 'templates'}
+          id="templates"
+        >
           <div className="dashboard-card-header">
             <div>
               <span className="eyebrow">Templates</span>
