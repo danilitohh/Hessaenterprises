@@ -49,6 +49,34 @@ type AuthFormState = {
   password: string
 }
 
+type DashboardPriority = 'High' | 'Low' | 'Medium'
+
+type DashboardFollowUpCard = {
+  clientId: string | null
+  clientName: string
+  company: string
+  email: string
+  id: string
+  isMock: boolean
+  lastContactDate: string | null
+  nextFollowUpDate: string | null
+  priority: DashboardPriority
+  projectName: string
+  proposalAmount: number
+  proposalValue: string
+  status: string
+  summary: string
+}
+
+type DashboardActivityItem = {
+  description: string
+  id: string
+  isMock: boolean
+  timestamp: string | null
+  title: string
+  tone: 'danger' | 'info' | 'success' | 'warning'
+}
+
 type SettingsFormState = {
   autoOpenDraftOnCreate: boolean
   fromEmail: string
@@ -315,6 +343,192 @@ const templateTokens = [
   '{{scheduledTime}}',
 ]
 
+const dashboardNavItems = [
+  { href: 'dashboard', label: 'Dashboard' },
+  { href: 'clients', label: 'Clients' },
+  { href: 'proposals', label: 'Proposals' },
+  { href: 'follow-ups', label: 'Follow-Ups' },
+  { href: 'email-drafts', label: 'Email Drafts' },
+  { href: 'templates', label: 'Templates' },
+  { href: 'settings', label: 'Settings' },
+]
+
+function formatCurrency(amount: number) {
+  return new Intl.NumberFormat('en-US', {
+    currency: 'USD',
+    maximumFractionDigits: 0,
+    style: 'currency',
+  }).format(amount)
+}
+
+function getInitials(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('')
+}
+
+function getStartOfToday() {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+function getEndOfToday() {
+  const date = new Date()
+  date.setHours(23, 59, 59, 999)
+  return date
+}
+
+function isDueToday(isoDate: string | null) {
+  if (!isoDate) {
+    return false
+  }
+
+  const dueDate = new Date(isoDate)
+  return dueDate >= getStartOfToday() && dueDate <= getEndOfToday()
+}
+
+function isOverdue(isoDate: string | null) {
+  if (!isoDate) {
+    return false
+  }
+
+  return new Date(isoDate) < getStartOfToday()
+}
+
+function compareNullableDates(firstDate: string | null, secondDate: string | null) {
+  const first = firstDate ? new Date(firstDate).getTime() : Number.POSITIVE_INFINITY
+  const second = secondDate ? new Date(secondDate).getTime() : Number.POSITIVE_INFINITY
+  return first - second
+}
+
+function createRelativeIsoDate(days: number, hours = 0) {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  date.setHours(date.getHours() + hours, 0, 0, 0)
+  return date.toISOString()
+}
+
+function getClientPriority(client: ClientRecord): DashboardPriority {
+  if (client.lastError || isOverdue(client.nextContactAt)) {
+    return 'High'
+  }
+
+  if (isDueToday(client.nextContactAt) || client.sentContacts >= client.targetContacts - 1) {
+    return 'Medium'
+  }
+
+  return 'Low'
+}
+
+function getClientProjectName(client: ClientRecord) {
+  return client.company ? `${client.company} follow-up` : 'Client follow-up sequence'
+}
+
+function createDashboardCardFromClient(client: ClientRecord): DashboardFollowUpCard {
+  return {
+    clientId: client.id,
+    clientName: client.name,
+    company: client.company || 'No company added',
+    email: client.email,
+    id: client.id,
+    isMock: false,
+    lastContactDate: client.lastContactAt,
+    nextFollowUpDate: client.nextContactAt,
+    priority: getClientPriority(client),
+    projectName: getClientProjectName(client),
+    proposalAmount: 0,
+    proposalValue: 'Not tracked yet',
+    status: getClientStatusLabel(client.status),
+    summary: client.notes || `${client.sentContacts}/${client.targetContacts} touchpoints completed`,
+  }
+}
+
+function createMockFollowUpCards(): DashboardFollowUpCard[] {
+  return [
+    {
+      clientId: null,
+      clientName: 'Acme Roofing',
+      company: 'Acme Roofing',
+      email: 'estimating@acmeroofing.example',
+      id: 'mock-acme-roofing',
+      isMock: true,
+      lastContactDate: createRelativeIsoDate(-2),
+      nextFollowUpDate: createRelativeIsoDate(0, 1),
+      priority: 'High',
+      projectName: 'Commercial roof replacement',
+      proposalAmount: 24500,
+      proposalValue: '$24,500',
+      status: 'Proposal sent',
+      summary: 'Decision maker asked for financing options before approval.',
+    },
+    {
+      clientId: null,
+      clientName: 'Northside Remodel',
+      company: 'Northside Remodel',
+      email: 'ops@northside.example',
+      id: 'mock-northside-remodel',
+      isMock: true,
+      lastContactDate: createRelativeIsoDate(-1),
+      nextFollowUpDate: createRelativeIsoDate(0, 3),
+      priority: 'Medium',
+      projectName: 'Kitchen renovation estimate',
+      proposalAmount: 18300,
+      proposalValue: '$18,300',
+      status: 'Pending review',
+      summary: 'Follow up after the site walkthrough and revised scope.',
+    },
+    {
+      clientId: null,
+      clientName: 'Valley HVAC',
+      company: 'Valley HVAC',
+      email: 'service@valleyhvac.example',
+      id: 'mock-valley-hvac',
+      isMock: true,
+      lastContactDate: createRelativeIsoDate(-4),
+      nextFollowUpDate: createRelativeIsoDate(0, 5),
+      priority: 'Low',
+      projectName: 'Maintenance contract proposal',
+      proposalAmount: 12800,
+      proposalValue: '$12,800',
+      status: 'Appointment scheduled',
+      summary: 'Confirm maintenance plan details before sending final proposal.',
+    },
+  ]
+}
+
+function createMockActivityItems(): DashboardActivityItem[] {
+  return [
+    {
+      description: 'Proposal follow-up prepared for Acme Roofing.',
+      id: 'mock-activity-1',
+      isMock: true,
+      timestamp: createRelativeIsoDate(0, -1),
+      title: 'Email draft queued',
+      tone: 'success',
+    },
+    {
+      description: 'Northside Remodel moved into pending review.',
+      id: 'mock-activity-2',
+      isMock: true,
+      timestamp: createRelativeIsoDate(-1),
+      title: 'Proposal status updated',
+      tone: 'warning',
+    },
+    {
+      description: 'Valley HVAC appointment reminder is ready for today.',
+      id: 'mock-activity-3',
+      isMock: true,
+      timestamp: createRelativeIsoDate(-2),
+      title: 'Follow-up scheduled',
+      tone: 'info',
+    },
+  ]
+}
+
 function App() {
   const diagnosticIdRef = useRef(0)
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -326,6 +540,7 @@ function App() {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([])
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false)
+  const [dashboardSearch, setDashboardSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isGoogleAuthenticating, setIsGoogleAuthenticating] = useState(false)
@@ -691,6 +906,13 @@ function App() {
         block: 'start',
       })
     }, 0)
+  }
+
+  function scrollToDashboardSection(sectionId: string) {
+    document.getElementById(sectionId)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
   }
 
   async function handleRecoveryExit() {
@@ -1360,220 +1582,406 @@ function App() {
   const activeClients = appState.clients.filter((client) => client.status === 'active')
   const finishedClients = appState.clients.filter((client) => client.status === 'finished')
   const canceledClients = appState.clients.filter((client) => client.status === 'canceled')
-  const statCards = [
-    { label: 'Total clients', value: appState.stats.total },
-    { label: 'Active sequences', value: appState.stats.active },
-    { label: 'Due now', value: appState.stats.dueNow, tone: 'accent' },
-    { label: 'Completed', value: appState.stats.finished },
-    { label: 'With errors', value: appState.stats.withErrors },
+  const sortedActiveClients = [...activeClients].sort((first, second) =>
+    compareNullableDates(first.nextContactAt, second.nextContactAt),
+  )
+  const dueTodayClients = sortedActiveClients.filter((client) => isDueToday(client.nextContactAt))
+  const overdueClients = sortedActiveClients.filter((client) => isOverdue(client.nextContactAt))
+  const featuredClients =
+    dueTodayClients.length || overdueClients.length
+      ? [...overdueClients, ...dueTodayClients]
+      : sortedActiveClients.slice(0, 4)
+  const mockFollowUpCards = createMockFollowUpCards()
+  const usingMockDashboardData = appState.clients.length === 0
+  const dashboardCards = usingMockDashboardData
+    ? mockFollowUpCards
+    : featuredClients.map(createDashboardCardFromClient)
+  const searchQuery = dashboardSearch.trim().toLowerCase()
+  const filteredDashboardCards = dashboardCards.filter((card) => {
+    if (!searchQuery) {
+      return true
+    }
+
+    return [
+      card.clientName,
+      card.company,
+      card.email,
+      card.priority,
+      card.projectName,
+      card.status,
+      card.summary,
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(searchQuery)
+  })
+  const filteredDirectoryClients = appState.clients.filter((client) => {
+    if (!searchQuery) {
+      return true
+    }
+
+    return [client.name, client.company, client.email, client.notes, client.status]
+      .join(' ')
+      .toLowerCase()
+      .includes(searchQuery)
+  })
+  const recentActivityFromClients: DashboardActivityItem[] = appState.clients
+    .flatMap((client) =>
+      client.history.map((item) => ({
+        description: item.error || `${client.name} · ${item.subject}`,
+        id: item.id,
+        isMock: false,
+        timestamp: item.happenedAt,
+        title: item.status === 'prepared' ? 'Draft opened' : 'Draft error',
+        tone: item.status === 'prepared' ? ('success' as const) : ('danger' as const),
+      })),
+    )
+    .sort((first, second) => {
+      const firstTime = first.timestamp ? new Date(first.timestamp).getTime() : 0
+      const secondTime = second.timestamp ? new Date(second.timestamp).getTime() : 0
+      return secondTime - firstTime
+    })
+    .slice(0, 5)
+  const activityItems = recentActivityFromClients.length
+    ? recentActivityFromClients
+    : createMockActivityItems()
+  const estimatedProposalAmount = usingMockDashboardData
+    ? mockFollowUpCards.reduce((total, card) => total + card.proposalAmount, 0)
+    : 0
+  const kpiCards = [
+    {
+      helper: usingMockDashboardData ? 'Demo queue until your first client is saved' : 'Scheduled for today',
+      label: 'Follow-ups due today',
+      value: String(usingMockDashboardData ? 6 : dueTodayClients.length),
+    },
+    {
+      helper: usingMockDashboardData ? 'Demo overdue opportunities' : 'Need attention before they go cold',
+      label: 'Overdue follow-ups',
+      tone: 'danger',
+      value: String(usingMockDashboardData ? 2 : overdueClients.length),
+    },
+    {
+      helper: usingMockDashboardData ? 'Demo proposal pipeline' : 'Using active client sequences',
+      label: 'Active proposals',
+      value: String(usingMockDashboardData ? 7 : activeClients.length),
+    },
+    {
+      helper: usingMockDashboardData
+        ? 'Demo estimate only'
+        : 'Proposal values are ready for the next database field',
+      label: 'Estimated proposal value',
+      tone: 'accent',
+      value: usingMockDashboardData ? formatCurrency(estimatedProposalAmount) : '$0',
+    },
+  ]
+  const proposalPipeline = [
+    {
+      count: usingMockDashboardData ? 4 : activeClients.length,
+      label: 'Sent',
+      value: usingMockDashboardData ? '$48K' : 'Active follow-ups',
+    },
+    {
+      count: usingMockDashboardData ? 2 : dueTodayClients.length + overdueClients.length,
+      label: 'Pending',
+      tone: 'warning',
+      value: 'Needs next step',
+    },
+    {
+      count: usingMockDashboardData ? 1 : finishedClients.length,
+      label: 'Approved',
+      tone: 'success',
+      value: 'Closed sequences',
+    },
+    {
+      count: usingMockDashboardData ? 1 : canceledClients.length,
+      label: 'Declined',
+      tone: 'danger',
+      value: 'Paused or stopped',
+    },
   ]
 
   return (
-    <main className="crm-shell">
+    <main className="dashboard-shell">
       {diagnosticsPanel}
-      <header className="workspace-topbar">
-        <div className="workspace-brand">
-          <span className="eyebrow">Hessa Follow Up</span>
-          <p>
-            Signed in as <strong>{appState.currentUser.name}</strong> · {appState.currentUser.email}
-          </p>
+
+      <aside className="dashboard-sidebar">
+        <div className="sidebar-brand">
+          <img alt="Hessa Enterprises" src={logoWordmark} />
+          <div>
+            <span className="eyebrow">CRM workspace</span>
+            <strong>Hessa Follow Up</strong>
+          </div>
         </div>
 
-        <button className="ghost-button" onClick={() => void handleLogout()} type="button">
-          Log out
-        </button>
-      </header>
-
-      <section className="hero-grid">
-        <article className="panel brand-stage">
-          <div className="brand-stage-header">
-            <span className="eyebrow">Hessa Enterprises</span>
-            <span className="stage-chip">Private workspace</span>
-          </div>
-
-          <div className="brand-stage-visual">
-            <div className="brand-glow"></div>
-            <img alt="Hessa Enterprises" className="brand-wordmark" src={logoWordmark} />
-          </div>
-
-          <div className="brand-stage-footer">
-            <span className="brand-caption">Client follow-up workspace</span>
-            <h2>Built for clean, structured outbound follow-up.</h2>
-            <p>
-              Manage clients, schedule each outreach touchpoint, and open ready-to-send
-              drafts from one organized workspace.
-            </p>
-          </div>
-        </article>
-
-        <article className="panel hero-brief">
-          <span className="eyebrow">Follow-up operations</span>
-          <h1>A minimal workspace for thoughtful sales follow-up.</h1>
-          <p className="lede">
-            Track every client, control timing, and keep each next step visible without
-            the clutter of a traditional dashboard.
-          </p>
-
-          <div className="hero-action-bar">
+        <nav className="sidebar-nav" aria-label="Workspace navigation">
+          {dashboardNavItems.map((item) => (
             <button
-              className="primary-button"
+              className={item.href === 'dashboard' ? 'sidebar-nav-item sidebar-nav-item-active' : 'sidebar-nav-item'}
+              key={item.href}
+              onClick={() => scrollToDashboardSection(item.href)}
+              type="button"
+            >
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-summary">
+          <span>Workspace health</span>
+          <strong>{activeClients.length || (usingMockDashboardData ? 7 : 0)} active</strong>
+          <small>
+            {usingMockDashboardData
+              ? 'Demo data is visible until you save your first client.'
+              : `${appState.stats.total} total clients tracked.`}
+          </small>
+        </div>
+      </aside>
+
+      <div className="dashboard-workspace">
+        <header className="dashboard-topbar">
+          <label className="dashboard-search">
+            <span>Search</span>
+            <input
+              onChange={(event) => setDashboardSearch(event.target.value)}
+              placeholder="Search clients, proposals, follow-ups..."
+              type="search"
+              value={dashboardSearch}
+            />
+          </label>
+
+          <button
+            className="primary-button dashboard-new-client"
+            onClick={() => scrollToDashboardSection('new-client')}
+            type="button"
+          >
+            New Client
+          </button>
+
+          <div className="dashboard-user-card">
+            <span>{getInitials(appState.currentUser.name || appState.currentUser.email)}</span>
+            <div>
+              <strong>{appState.currentUser.name}</strong>
+              <small>{appState.currentUser.email}</small>
+            </div>
+          </div>
+
+          <button className="ghost-button dashboard-logout" onClick={() => void handleLogout()} type="button">
+            Logout
+          </button>
+        </header>
+
+        {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
+
+        <section className="dashboard-overview" id="dashboard">
+          <div className="dashboard-heading">
+            <div>
+              <span className="eyebrow">Hessa Enterprises</span>
+              <h1>Follow-up dashboard</h1>
+              <p>
+                Track client next steps, proposal momentum, and ready-to-open email drafts from one
+                focused workspace.
+              </p>
+            </div>
+
+            {usingMockDashboardData ? (
+              <span className="demo-data-badge">Demo data shown until first client</span>
+            ) : (
+              <span className="demo-data-badge live-data-badge">Live workspace data</span>
+            )}
+          </div>
+
+          <div className="dashboard-kpi-grid">
+            {kpiCards.map((card) => (
+              <article className={`dashboard-kpi-card ${card.tone ? `dashboard-kpi-${card.tone}` : ''}`} key={card.label}>
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+                <small>{card.helper}</small>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="dashboard-primary-grid">
+          <article className="dashboard-card followup-dashboard-card" id="follow-ups">
+            <div className="dashboard-card-header">
+              <div>
+                <span className="eyebrow">Follow-ups</span>
+                <h2>Follow-ups due today</h2>
+              </div>
+              <button
+                className="secondary-button compact-action"
+                disabled={isProcessingQueue || usingMockDashboardData}
+                onClick={() => void handleProcessQueue()}
+                type="button"
+              >
+                {isProcessingQueue ? 'Opening...' : 'Open next draft'}
+              </button>
+            </div>
+
+            {filteredDashboardCards.length === 0 ? (
+              <div className="dashboard-empty-state">
+                <h3>No follow-ups match this view</h3>
+                <p>Try clearing search or create a new client sequence.</p>
+              </div>
+            ) : (
+              <div className="followup-card-list">
+                {filteredDashboardCards.map((card) => {
+                  const isBusy = card.clientId ? busyClientId === card.clientId : false
+
+                  return (
+                    <article className="followup-client-card" key={card.id}>
+                      <div className="followup-client-top">
+                        <div>
+                          <div className="identity-row">
+                            <span className={`priority-badge priority-${card.priority.toLowerCase()}`}>
+                              {card.priority} priority
+                            </span>
+                            {card.isMock ? <span className="mock-data-pill">UI demo</span> : null}
+                          </div>
+                          <h3>{card.clientName}</h3>
+                          <p>{card.projectName}</p>
+                        </div>
+                        <strong className="proposal-value">{card.proposalValue}</strong>
+                      </div>
+
+                      <div className="followup-detail-grid">
+                        <div>
+                          <span>Current status</span>
+                          <strong>{card.status}</strong>
+                        </div>
+                        <div>
+                          <span>Last contact</span>
+                          <strong>{formatDateTime(card.lastContactDate)}</strong>
+                        </div>
+                        <div>
+                          <span>Next follow-up</span>
+                          <strong>{formatDateTime(card.nextFollowUpDate)}</strong>
+                        </div>
+                      </div>
+
+                      <p className="followup-summary">{card.summary}</p>
+
+                      <div className="followup-action-row">
+                        <button
+                          className="primary-button"
+                          disabled={card.isMock || isBusy || !card.clientId}
+                          onClick={() => {
+                            if (card.clientId) {
+                              void handleSendClient(card.clientId)
+                            }
+                          }}
+                          type="button"
+                        >
+                          {isBusy ? 'Opening...' : 'Open Draft'}
+                        </button>
+                        <button
+                          className="ghost-button"
+                          onClick={() =>
+                            setNotice({
+                              tone: 'info',
+                              message:
+                                'Open Draft records the current follow-up. Manual Mark Done can be connected when proposal tracking has database fields.',
+                            })
+                          }
+                          title="Manual completion will be available once proposal tracking has a database field."
+                          type="button"
+                        >
+                          Mark Done
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={card.isMock}
+                          onClick={() =>
+                            scrollToDashboardSection(card.clientId ? `client-record-${card.clientId}` : 'clients')
+                          }
+                          type="button"
+                        >
+                          View Client
+                        </button>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            )}
+          </article>
+
+          <div className="dashboard-side-stack">
+            <article className="dashboard-card" id="proposals">
+              <div className="dashboard-card-header">
+                <div>
+                  <span className="eyebrow">Pipeline</span>
+                  <h2>Proposal pipeline</h2>
+                </div>
+                {usingMockDashboardData ? <span className="mock-data-pill">Demo</span> : null}
+              </div>
+
+              <div className="pipeline-stage-list">
+                {proposalPipeline.map((stage) => (
+                  <div className={`pipeline-stage pipeline-${stage.tone || 'info'}`} key={stage.label}>
+                    <span>{stage.label}</span>
+                    <strong>{stage.count}</strong>
+                    <small>{stage.value}</small>
+                  </div>
+                ))}
+              </div>
+            </article>
+
+            <article className="dashboard-card">
+              <div className="dashboard-card-header">
+                <div>
+                  <span className="eyebrow">Activity</span>
+                  <h2>Recent activity</h2>
+                </div>
+                {activityItems.some((item) => item.isMock) ? <span className="mock-data-pill">Demo</span> : null}
+              </div>
+
+              <div className="activity-feed">
+                {activityItems.map((item) => (
+                  <div className={`activity-item activity-${item.tone}`} key={item.id}>
+                    <span></span>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.description}</p>
+                      <small>{formatDateTime(item.timestamp)}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section className="dashboard-operations-grid">
+          <article className="dashboard-card" id="email-drafts">
+            <div className="dashboard-card-header">
+              <div>
+                <span className="eyebrow">Email drafts</span>
+                <h2>Draft queue</h2>
+              </div>
+              <span className="section-count">{appState.stats.dueNow}</span>
+            </div>
+
+            <p className="dashboard-card-copy">
+              Email sending stays exactly as before: the app opens a prepared `mailto:` draft in
+              your default mail app.
+            </p>
+
+            <button
+              className="primary-button full-width"
               disabled={isProcessingQueue}
               onClick={() => void handleProcessQueue()}
               type="button"
             >
-              {isProcessingQueue ? 'Opening next draft...' : 'Open next draft'}
+              {isProcessingQueue ? 'Opening next draft...' : 'Open next scheduled draft'}
             </button>
-
-            <p className="action-note">
-              Opens the next scheduled email as a draft in your default mail app.
-            </p>
-          </div>
-        </article>
-      </section>
-
-      <div className="notice notice-info">
-        This web version stores its data in <code>localStorage</code> and opens each
-        email as a draft. If you want fully automated sending later, the next step is a
-        backend or an email provider integration.
-      </div>
-
-      {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
-
-      <section className="metric-ribbon">
-        {statCards.map((card) => (
-          <article
-            className={`panel metric-card ${card.tone === 'accent' ? 'metric-card-accent' : ''}`}
-            key={card.label}
-          >
-            <span className="metric-label">{card.label}</span>
-            <strong>{card.value}</strong>
-          </article>
-        ))}
-      </section>
-
-      <section className="workspace-grid">
-        <div className="control-column">
-          <article className="panel studio-card">
-            <div className="studio-heading">
-              <span className="section-index">01</span>
-              <div>
-                <span className="eyebrow">Intake</span>
-                <h2>Create a new sequence</h2>
-              </div>
-            </div>
-
-            <form className="stack-form" onSubmit={handleClientSubmit}>
-              <label className="field">
-                <span>Client name</span>
-                <input
-                  onChange={(event) =>
-                    setClientForm((current) => ({ ...current, name: event.target.value }))
-                  }
-                  placeholder="e.g. Laura Ramirez"
-                  required
-                  type="text"
-                  value={clientForm.name}
-                />
-              </label>
-
-              <div className="field-row">
-                <label className="field">
-                  <span>Email</span>
-                  <input
-                    onChange={(event) =>
-                      setClientForm((current) => ({ ...current, email: event.target.value }))
-                    }
-                    placeholder="client@company.com"
-                    required
-                    type="email"
-                    value={clientForm.email}
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Company</span>
-                  <input
-                    onChange={(event) =>
-                      setClientForm((current) => ({ ...current, company: event.target.value }))
-                    }
-                    placeholder="Optional"
-                    type="text"
-                    value={clientForm.company}
-                  />
-                </label>
-              </div>
-
-              <label className="field">
-                <span>Internal notes</span>
-                <textarea
-                  onChange={(event) =>
-                    setClientForm((current) => ({ ...current, notes: event.target.value }))
-                  }
-                  placeholder="Context, objections, timing, priority..."
-                  rows={4}
-                  value={clientForm.notes}
-                />
-              </label>
-
-              <div className="composer-topline">
-                <label className="field compact-field">
-                  <span>Max touchpoints</span>
-                  <select
-                    className="select-input"
-                    onChange={(event) => updateClientSchedule(Number(event.target.value))}
-                    value={clientForm.targetContacts}
-                  >
-                    {Array.from({ length: MAX_CONTACTS }, (_, index) => {
-                      const option = index + 1
-                      return (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      )
-                    })}
-                  </select>
-                </label>
-
-                <div className="composer-note">
-                  <span>Sequence timing</span>
-                  <strong>{settingsForm.intervalDays} days between touchpoints</strong>
-                  <small>Each slot below sets the send time for that step in the sequence.</small>
-                </div>
-              </div>
-
-              <div className="schedule-board">
-                {clientForm.contactScheduleTimes.map((time, index) => (
-                  <label className="schedule-tile" key={`contact-time-${index + 1}`}>
-                    <span>Touchpoint {index + 1}</span>
-                    <input
-                      onChange={(event) =>
-                        setClientForm((current) => ({
-                          ...current,
-                          contactScheduleTimes: current.contactScheduleTimes.map((item, itemIndex) =>
-                            itemIndex === index ? event.target.value : item,
-                          ),
-                        }))
-                      }
-                      required
-                      type="time"
-                      value={time}
-                    />
-                  </label>
-                ))}
-              </div>
-
-              <button className="primary-button full-width" disabled={isSubmittingClient} type="submit">
-                {isSubmittingClient ? 'Saving client...' : 'Save client'}
-              </button>
-            </form>
           </article>
 
-          <article className="panel studio-card">
-            <div className="studio-heading">
-              <span className="section-index">02</span>
+          <article className="dashboard-card" id="settings">
+            <div className="dashboard-card-header">
               <div>
                 <span className="eyebrow">Settings</span>
-                <h2>Brand and workflow settings</h2>
+                <h2>Brand and workflow</h2>
               </div>
             </div>
 
@@ -1624,152 +2032,173 @@ function App() {
                   />
                 </label>
 
-                <div className="composer-note">
-                  <span>Draft delivery</span>
-                  <strong>Handled by your browser</strong>
-                  <small>The final sending account depends on the mail app you open.</small>
-                </div>
+                <label className="checkbox-field">
+                  <input
+                    checked={settingsForm.autoOpenDraftOnCreate}
+                    onChange={(event) =>
+                      setSettingsForm((current) =>
+                        current
+                          ? { ...current, autoOpenDraftOnCreate: event.target.checked }
+                          : current,
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  <span>Open the first draft automatically when it is already due</span>
+                </label>
               </div>
-
-              <label className="checkbox-field">
-                <input
-                  checked={settingsForm.autoOpenDraftOnCreate}
-                  onChange={(event) =>
-                    setSettingsForm((current) =>
-                      current
-                        ? { ...current, autoOpenDraftOnCreate: event.target.checked }
-                        : current,
-                    )
-                  }
-                  type="checkbox"
-                />
-                <span>Open the first draft automatically when it is already due</span>
-              </label>
 
               <button className="secondary-button full-width" disabled={isSavingSettings} type="submit">
                 {isSavingSettings ? 'Saving settings...' : 'Save settings'}
               </button>
             </form>
           </article>
+        </section>
 
-          <article className="panel studio-card">
-            <div className="studio-heading">
-              <span className="section-index">03</span>
-              <div>
-                <span className="eyebrow">Templates</span>
-                <h2>Edit email copy by touchpoint</h2>
-              </div>
+        <section className="dashboard-card" id="clients">
+          <div className="dashboard-card-header">
+            <div>
+              <span className="eyebrow">Clients</span>
+              <h2>Client workspace</h2>
             </div>
+            <span className="section-count">{filteredDirectoryClients.length}</span>
+          </div>
 
-            <div className="template-stack">
-              {settingsForm.templates.map((template, index) => (
-                <div className="template-editor" key={template.id}>
-                  <div className="template-editor-head">
-                    <strong>{`Touchpoint ${index + 1}`}</strong>
-                    <span>Email copy</span>
-                  </div>
+          <div className="client-workspace-grid">
+            <article className="client-intake-card" id="new-client">
+              <div className="studio-heading">
+                <span className="section-index">01</span>
+                <div>
+                  <span className="eyebrow">Intake</span>
+                  <h3>Create a new sequence</h3>
+                </div>
+              </div>
 
+              <form className="stack-form" onSubmit={handleClientSubmit}>
+                <label className="field">
+                  <span>Client name</span>
+                  <input
+                    onChange={(event) =>
+                      setClientForm((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="e.g. Laura Ramirez"
+                    required
+                    type="text"
+                    value={clientForm.name}
+                  />
+                </label>
+
+                <div className="field-row">
                   <label className="field">
-                    <span>Subject line</span>
+                    <span>Email</span>
                     <input
                       onChange={(event) =>
-                        setSettingsForm((current) =>
-                          current
-                            ? {
-                                ...current,
-                                templates: current.templates.map((item, itemIndex) =>
-                                  itemIndex === index
-                                    ? { ...item, subject: event.target.value }
-                                    : item,
-                                ),
-                              }
-                            : current,
-                        )
+                        setClientForm((current) => ({ ...current, email: event.target.value }))
                       }
-                      type="text"
-                      value={template.subject}
+                      placeholder="client@company.com"
+                      required
+                      type="email"
+                      value={clientForm.email}
                     />
                   </label>
 
                   <label className="field">
-                    <span>Body</span>
-                    <textarea
+                    <span>Company</span>
+                    <input
                       onChange={(event) =>
-                        setSettingsForm((current) =>
-                          current
-                            ? {
-                                ...current,
-                                templates: current.templates.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, body: event.target.value } : item,
-                                ),
-                              }
-                            : current,
-                        )
+                        setClientForm((current) => ({ ...current, company: event.target.value }))
                       }
-                      rows={7}
-                      value={template.body}
+                      placeholder="Optional"
+                      type="text"
+                      value={clientForm.company}
                     />
                   </label>
                 </div>
-              ))}
-            </div>
 
-            <div className="token-rack">
-              {templateTokens.map((token) => (
-                <code key={token}>{token}</code>
-              ))}
-            </div>
+                <label className="field">
+                  <span>Internal notes</span>
+                  <textarea
+                    onChange={(event) =>
+                      setClientForm((current) => ({ ...current, notes: event.target.value }))
+                    }
+                    placeholder="Context, objections, timing, priority..."
+                    rows={4}
+                    value={clientForm.notes}
+                  />
+                </label>
 
-            <button
-              className="secondary-button full-width"
-              disabled={isSavingSettings}
-              onClick={() => void saveSettingsChanges()}
-              type="button"
-            >
-              {isSavingSettings ? 'Saving templates...' : 'Save templates'}
-            </button>
-          </article>
-        </div>
+                <div className="composer-topline">
+                  <label className="field compact-field">
+                    <span>Max touchpoints</span>
+                    <select
+                      className="select-input"
+                      onChange={(event) => updateClientSchedule(Number(event.target.value))}
+                      value={clientForm.targetContacts}
+                    >
+                      {Array.from({ length: MAX_CONTACTS }, (_, index) => {
+                        const option = index + 1
+                        return (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </label>
 
-        <div className="board-column">
-          <article className="panel board-stage">
-            <div className="board-stage-copy">
-              <span className="eyebrow">Pipeline</span>
-              <h2>Your follow-up queue, completed sequences, and paused work.</h2>
-              <p>
-                Every client stays visible in a simple structure so you can focus on
-                timing, copy, and next actions instead of navigating clutter.
-              </p>
-            </div>
-          </article>
+                  <div className="composer-note">
+                    <span>Sequence timing</span>
+                    <strong>{settingsForm.intervalDays} days between touchpoints</strong>
+                    <small>Each slot below sets the send time for that step in the sequence.</small>
+                  </div>
+                </div>
 
-          <section className="board-section">
-            <div className="section-banner">
-              <div>
-                <span className="eyebrow">Live queue</span>
-                <h3>Active follow-up queue</h3>
-              </div>
-              <span className="section-count">{activeClients.length}</span>
-            </div>
+                <div className="schedule-board">
+                  {clientForm.contactScheduleTimes.map((time, index) => (
+                    <label className="schedule-tile" key={`contact-time-${index + 1}`}>
+                      <span>Touchpoint {index + 1}</span>
+                      <input
+                        onChange={(event) =>
+                          setClientForm((current) => ({
+                            ...current,
+                            contactScheduleTimes: current.contactScheduleTimes.map((item, itemIndex) =>
+                              itemIndex === index ? event.target.value : item,
+                            ),
+                          }))
+                        }
+                        required
+                        type="time"
+                        value={time}
+                      />
+                    </label>
+                  ))}
+                </div>
 
-            {activeClients.length === 0 ? (
-              <article className="panel empty-state">
-                <h3>No active clients yet</h3>
-                <p>New client sequences will appear here as soon as you create them.</p>
-              </article>
-            ) : (
-              <div className="board-list">
-                {activeClients.map((client) => {
+                <button className="primary-button full-width" disabled={isSubmittingClient} type="submit">
+                  {isSubmittingClient ? 'Saving client...' : 'Save client'}
+                </button>
+              </form>
+            </article>
+
+            <div className="client-directory-list">
+              {filteredDirectoryClients.length === 0 ? (
+                <article className="dashboard-empty-state">
+                  <h3>No saved clients yet</h3>
+                  <p>Create your first client sequence to replace the demo cards above.</p>
+                </article>
+              ) : (
+                filteredDirectoryClients.map((client) => {
                   const attemptStatuses = createAttemptStatuses(client)
                   const isBusy = busyClientId === client.id
-                  const isLastAttempt = client.sentContacts === client.targetContacts - 1
+                  const isFinished = client.status === 'finished'
+                  const isPaused = client.status === 'canceled'
 
                   return (
-                    <article className="panel inbox-card" key={client.id}>
-                      <div className="inbox-card-top">
+                    <article className="client-directory-card" id={`client-record-${client.id}`} key={client.id}>
+                      <div className="client-directory-head">
                         <div>
                           <div className="identity-row">
-                            <span className="status-pill pill-active">
+                            <span className={`status-pill pill-${client.status}`}>
                               {getClientStatusLabel(client.status)}
                             </span>
                             <span className="meta-pill">{getClientStageLabel(client)}</span>
@@ -1781,17 +2210,11 @@ function App() {
                         </div>
 
                         <div className="next-window">
-                          <span>Next draft</span>
-                          <strong>{formatRelativeDue(client.nextContactAt)}</strong>
-                          <small>{formatDateTime(client.nextContactAt)}</small>
+                          <span>{isPaused ? 'Paused on' : 'Next draft'}</span>
+                          <strong>{formatRelativeDue(isPaused ? client.canceledAt : client.nextContactAt)}</strong>
+                          <small>{formatDateTime(isPaused ? client.canceledAt : client.nextContactAt)}</small>
                         </div>
                       </div>
-
-                      {isLastAttempt ? (
-                        <div className="final-attempt-banner">
-                          This client is moving into the final scheduled touchpoint.
-                        </div>
-                      ) : null}
 
                       <div className="attempt-track">
                         {attemptStatuses.map((status, index) => (
@@ -1804,16 +2227,18 @@ function App() {
 
                       <div className="meta-grid">
                         <div className="meta-card">
-                          <span className="meta-label">Completed</span>
-                          <strong>{client.sentContacts}</strong>
-                        </div>
-                        <div className="meta-card">
-                          <span className="meta-label">Last draft</span>
+                          <span className="meta-label">Last contact</span>
                           <strong>{formatDateTime(client.lastContactAt)}</strong>
                         </div>
                         <div className="meta-card">
                           <span className="meta-label">Created</span>
                           <strong>{formatDateTime(client.createdAt)}</strong>
+                        </div>
+                        <div className="meta-card">
+                          <span className="meta-label">Completed</span>
+                          <strong>
+                            {client.sentContacts}/{client.targetContacts}
+                          </strong>
                         </div>
                       </div>
 
@@ -1821,182 +2246,133 @@ function App() {
                       {client.notes ? <p className="client-note">{client.notes}</p> : null}
 
                       <div className="action-row">
-                        <button
-                          className="primary-button"
-                          disabled={isBusy}
-                          onClick={() => void handleSendClient(client.id)}
-                          type="button"
-                        >
-                          {isBusy ? 'Opening...' : 'Open draft'}
-                        </button>
+                        {client.status === 'active' ? (
+                          <>
+                            <button
+                              className="primary-button"
+                              disabled={isBusy}
+                              onClick={() => void handleSendClient(client.id)}
+                              type="button"
+                            >
+                              {isBusy ? 'Opening...' : 'Open draft'}
+                            </button>
+                            <button
+                              className="ghost-button"
+                              disabled={isBusy}
+                              onClick={() => void handleToggleClient(client)}
+                              type="button"
+                            >
+                              Pause client
+                            </button>
+                          </>
+                        ) : null}
 
-                        <button
-                          className="ghost-button"
-                          disabled={isBusy}
-                          onClick={() => void handleToggleClient(client)}
-                          type="button"
-                        >
-                          Pause client
-                        </button>
-                      </div>
+                        {isPaused ? (
+                          <button
+                            className="secondary-button"
+                            disabled={isBusy}
+                            onClick={() => void handleToggleClient(client)}
+                            type="button"
+                          >
+                            {isBusy ? 'Rescheduling...' : 'Resume client'}
+                          </button>
+                        ) : null}
 
-                      <div className="history-stack">
-                        <div className="history-header">
-                          <span className="eyebrow">Recent activity</span>
-                        </div>
-
-                        {client.history.length === 0 ? (
-                          <p className="history-empty">
-                            No drafts have been opened for this client yet.
-                          </p>
-                        ) : (
-                          client.history.slice(0, 4).map((item) => (
-                            <div className="history-row" key={item.id}>
-                              <div className="history-main">
-                                <strong>
-                                  {`Touchpoint ${item.contactNumber}`} ·{' '}
-                                  {item.status === 'prepared' ? 'Draft opened' : 'Error'}
-                                </strong>
-                                <span>{item.subject}</span>
-                              </div>
-                              <div className="history-side">
-                                <span>{formatDateTime(item.happenedAt)}</span>
-                                <small>{item.error || item.preview}</small>
-                              </div>
-                            </div>
-                          ))
-                        )}
+                        {isFinished ? (
+                          <button
+                            className="danger-button"
+                            disabled={isBusy}
+                            onClick={() => void handleDeleteClient(client)}
+                            type="button"
+                          >
+                            {isBusy ? 'Deleting...' : 'Delete client'}
+                          </button>
+                        ) : null}
                       </div>
                     </article>
                   )
-                })}
-              </div>
-            )}
-          </section>
-
-          <section className="board-section">
-            <div className="section-banner">
-              <div>
-                <span className="eyebrow">Completed</span>
-                <h3>Completed sequences</h3>
-              </div>
-              <span className="section-count">{finishedClients.length}</span>
+                })
+              )}
             </div>
+          </div>
+        </section>
 
-            {finishedClients.length === 0 ? (
-              <article className="panel empty-state">
-                <h3>No completed sequences yet</h3>
-                <p>Clients that finish every planned touchpoint will appear here.</p>
-              </article>
-            ) : (
-              <div className="board-list">
-                {finishedClients.map((client) => {
-                  const isBusy = busyClientId === client.id
+        <section className="dashboard-card" id="templates">
+          <div className="dashboard-card-header">
+            <div>
+              <span className="eyebrow">Templates</span>
+              <h2>Email copy by touchpoint</h2>
+            </div>
+            <span className="section-count">{settingsForm.templates.length}</span>
+          </div>
 
-                  return (
-                    <article className="panel archive-card" key={client.id}>
-                      <div className="archive-top">
-                        <div>
-                          <div className="identity-row">
-                            <span className="status-pill pill-finished">Completed</span>
-                            <span className="meta-pill">{getClientStageLabel(client)}</span>
-                          </div>
-                          <h3>{client.name}</h3>
-                          <p className="client-subtitle">
-                            Sequence completed with {client.sentContacts} of {client.targetContacts}{' '}
-                            touchpoints.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="archive-highlight">
-                        <strong>Sequence successfully closed</strong>
-                        <span>Keep this record for reference or remove it from the workspace.</span>
-                      </div>
-
-                      <div className="meta-grid">
-                        <div className="meta-card">
-                          <span className="meta-label">Completed on</span>
-                          <strong>{formatDateTime(client.finishedAt)}</strong>
-                        </div>
-                        <div className="meta-card">
-                          <span className="meta-label">Last draft</span>
-                          <strong>{formatDateTime(client.lastContactAt)}</strong>
-                        </div>
-                        <div className="meta-card">
-                          <span className="meta-label">Company</span>
-                          <strong>{client.company || 'No company'}</strong>
-                        </div>
-                      </div>
-
-                      <button
-                        className="danger-button"
-                        disabled={isBusy}
-                        onClick={() => void handleDeleteClient(client)}
-                        type="button"
-                      >
-                        {isBusy ? 'Deleting...' : 'Delete client'}
-                      </button>
-                    </article>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-
-          {canceledClients.length > 0 ? (
-            <section className="board-section">
-              <div className="section-banner">
-                <div>
-                  <span className="eyebrow">Paused</span>
-                  <h3>Paused clients</h3>
+          <div className="template-stack">
+            {settingsForm.templates.map((template, index) => (
+              <div className="template-editor" key={template.id}>
+                <div className="template-editor-head">
+                  <strong>{`Touchpoint ${index + 1}`}</strong>
+                  <span>Email copy</span>
                 </div>
-                <span className="section-count">{canceledClients.length}</span>
+
+                <label className="field">
+                  <span>Subject line</span>
+                  <input
+                    onChange={(event) =>
+                      setSettingsForm((current) =>
+                        current
+                          ? {
+                              ...current,
+                              templates: current.templates.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, subject: event.target.value } : item,
+                              ),
+                            }
+                          : current,
+                      )
+                    }
+                    type="text"
+                    value={template.subject}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Body</span>
+                  <textarea
+                    onChange={(event) =>
+                      setSettingsForm((current) =>
+                        current
+                          ? {
+                              ...current,
+                              templates: current.templates.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, body: event.target.value } : item,
+                              ),
+                            }
+                          : current,
+                      )
+                    }
+                    rows={7}
+                    value={template.body}
+                  />
+                </label>
               </div>
+            ))}
+          </div>
 
-              <div className="board-list">
-                {canceledClients.map((client) => {
-                  const isBusy = busyClientId === client.id
+          <div className="token-rack">
+            {templateTokens.map((token) => (
+              <code key={token}>{token}</code>
+            ))}
+          </div>
 
-                  return (
-                    <article className="panel paused-card" key={client.id}>
-                      <div className="inbox-card-top">
-                        <div>
-                          <div className="identity-row">
-                            <span className="status-pill pill-canceled">
-                              {getClientStatusLabel(client.status)}
-                            </span>
-                            <span className="meta-pill">{getClientStageLabel(client)}</span>
-                          </div>
-                          <h3>{client.name}</h3>
-                          <p className="client-subtitle">
-                            {client.company || 'No company'} · {client.email}
-                          </p>
-                        </div>
-
-                        <div className="next-window muted-window">
-                          <span>Paused on</span>
-                          <strong>{formatDateTime(client.canceledAt)}</strong>
-                          <small>Ready to resume</small>
-                        </div>
-                      </div>
-
-                      <button
-                        className="secondary-button"
-                        disabled={isBusy}
-                        onClick={() => void handleToggleClient(client)}
-                        type="button"
-                      >
-                        {isBusy ? 'Rescheduling...' : 'Resume client'}
-                      </button>
-                    </article>
-                  )
-                })}
-              </div>
-            </section>
-          ) : null}
-        </div>
-      </section>
+          <button
+            className="secondary-button full-width"
+            disabled={isSavingSettings}
+            onClick={() => void saveSettingsChanges()}
+            type="button"
+          >
+            {isSavingSettings ? 'Saving templates...' : 'Save templates'}
+          </button>
+        </section>
+      </div>
     </main>
   )
 }
