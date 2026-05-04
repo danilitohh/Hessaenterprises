@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useEffectEvent, useRef, useState, type FormEvent } from 'react'
+import { startTransition, useEffect, useEffectEvent, useState, type FormEvent } from 'react'
 import appointmentManagementIcon from './assets/landing-icons/appointment-management.png?url&no-inline'
 import browserAccessIcon from './assets/landing-icons/browser-access.png?url&no-inline'
 import clientHistoryIcon from './assets/landing-icons/client-history.png?url&no-inline'
@@ -14,67 +14,27 @@ import type {
   ClientRecord,
   ClientStatus,
   EmailTemplate,
-  GoogleAuthInput,
   LoginInput,
+  PasswordResetInput,
+  PasswordUpdateInput,
   RegisterInput,
   SettingsInput,
   SettingsState,
 } from './types'
+import { supabase } from './supabaseClient'
 import { webApp } from './webApp'
 import './App.css'
 
 const MAX_CONTACTS = 4
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
-const GOOGLE_SCRIPT_SRC = 'https://accounts.google.com/gsi/client'
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? ''
 const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-
-type GoogleCredentialResponse = {
-  credential?: string
-  select_by?: string
-  state?: string
-}
-
-type GoogleButtonText = 'continue_with' | 'signin_with' | 'signup_with' | 'signin'
-
-type GoogleButtonOptions = {
-  shape?: 'pill' | 'rectangular' | 'circle' | 'square'
-  size?: 'large' | 'medium' | 'small'
-  text?: GoogleButtonText
-  theme?: 'outline' | 'filled_blue' | 'filled_black'
-  type?: 'standard' | 'icon'
-  width?: number
-}
-
-type GoogleIdentityApi = {
-  disableAutoSelect: () => void
-  initialize: (configuration: {
-    auto_select?: boolean
-    callback: (response: GoogleCredentialResponse) => void
-    client_id: string
-  }) => void
-  renderButton: (parent: HTMLElement, options: GoogleButtonOptions) => void
-}
-
-declare global {
-  interface Window {
-    google?: {
-      accounts?: {
-        id?: GoogleIdentityApi
-      }
-    }
-  }
-}
-
-let activeGoogleCredentialHandler: ((response: GoogleCredentialResponse) => void) | null = null
-let initializedGoogleClientId: string | null = null
 
 type Notice = {
   tone: 'error' | 'info' | 'success'
   message: string
 }
 
-type AuthMode = 'login' | 'register'
+type AuthMode = 'forgot-password' | 'login' | 'register' | 'reset-password'
 
 type AuthFormState = {
   email: string
@@ -111,6 +71,56 @@ function createInitialAuthForm(): AuthFormState {
 
 function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Something went wrong.'
+}
+
+function getAuthTitle(authMode: AuthMode) {
+  if (authMode === 'forgot-password') {
+    return 'Recover your password'
+  }
+
+  if (authMode === 'reset-password') {
+    return 'Create a new password'
+  }
+
+  return authMode === 'login' ? 'Welcome back' : 'Create your workspace'
+}
+
+function getAuthDescription(authMode: AuthMode) {
+  if (authMode === 'forgot-password') {
+    return 'Enter your account email and we will send a secure password reset link.'
+  }
+
+  if (authMode === 'reset-password') {
+    return 'Set a new password for your Hessa workspace.'
+  }
+
+  return authMode === 'login'
+    ? 'Sign in to open your client follow-up command center.'
+    : 'Register a new account to organize clients, proposals, appointments, and next steps.'
+}
+
+function getAuthSubmitLabel(authMode: AuthMode, isAuthenticating: boolean) {
+  if (isAuthenticating) {
+    if (authMode === 'forgot-password') {
+      return 'Sending reset link...'
+    }
+
+    if (authMode === 'reset-password') {
+      return 'Updating password...'
+    }
+
+    return authMode === 'login' ? 'Signing in...' : 'Creating account...'
+  }
+
+  if (authMode === 'forgot-password') {
+    return 'Send reset link'
+  }
+
+  if (authMode === 'reset-password') {
+    return 'Update password'
+  }
+
+  return authMode === 'login' ? 'Log in' : 'Create account'
 }
 
 function formatDateTime(isoDate: string | null) {
@@ -266,7 +276,6 @@ const templateTokens = [
 ]
 
 function App() {
-  const googleButtonRef = useRef<HTMLDivElement | null>(null)
   const [session, setSession] = useState<AuthSession | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [clientForm, setClientForm] = useState<ClientInput>(() => createInitialClientForm())
@@ -277,7 +286,6 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isGoogleAuthenticating, setIsGoogleAuthenticating] = useState(false)
-  const [isGoogleReady, setIsGoogleReady] = useState(() => Boolean(window.google?.accounts?.id))
   const [isSubmittingClient, setIsSubmittingClient] = useState(false)
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [isProcessingQueue, setIsProcessingQueue] = useState(false)
@@ -326,47 +334,19 @@ function App() {
     }
   })
 
-  const handleGoogleCredential = useEffectEvent(async (response: GoogleCredentialResponse) => {
-    if (!GOOGLE_CLIENT_ID) {
-      setNotice({
-        tone: 'error',
-        message: 'Google sign-in needs a Google client ID before it can be used.',
-      })
-      return
-    }
-
-    if (!response.credential) {
-      setNotice({
-        tone: 'error',
-        message: 'Google sign-in did not return an account credential. Please try again.',
-      })
-      return
-    }
-
-    setIsGoogleAuthenticating(true)
-
+  const syncAuthSession = useEffectEvent(async () => {
     try {
-      const payload: GoogleAuthInput = {
-        clientId: GOOGLE_CLIENT_ID,
-        credential: response.credential,
-      }
-      const nextSession = await webApp.continueWithGoogle(payload)
-
-      setAuthForm(createInitialAuthForm())
+      const nextSession = await webApp.getSession()
       setSession(nextSession)
-      setNotice({
-        tone: 'success',
-        message: nextSession.isNewUser
-          ? 'Google account connected. Your workspace is ready.'
-          : 'Signed in with Google successfully.',
-      })
+
+      if (nextSession) {
+        setAuthForm(createInitialAuthForm())
+      }
     } catch (error) {
       setNotice({
         tone: 'error',
         message: toErrorMessage(error),
       })
-    } finally {
-      setIsGoogleAuthenticating(false)
     }
   })
 
@@ -389,91 +369,50 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (session || !GOOGLE_CLIENT_ID) {
+    if (!supabase) {
       return
     }
 
-    if (window.google?.accounts?.id) {
-      const readyTimer = window.setTimeout(() => {
-        setIsGoogleReady(true)
+    const recoveryTimer =
+      new URLSearchParams(window.location.search).get('auth') === 'reset-password'
+        ? window.setTimeout(() => {
+            setAuthMode('reset-password')
+          }, 0)
+        : null
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      window.setTimeout(() => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setAuthMode('reset-password')
+          setNotice({
+            tone: 'info',
+            message: 'Choose a new password to finish recovering your account.',
+          })
+        }
+
+        if (event === 'SIGNED_OUT') {
+          setSession(null)
+          setAppState(null)
+          setSettingsForm(null)
+          return
+        }
+
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+          void syncAuthSession()
+        }
       }, 0)
-
-      return () => {
-        window.clearTimeout(readyTimer)
-      }
-    }
-
-    let isMounted = true
-    const existingScript = document.querySelector<HTMLScriptElement>(
-      `script[src="${GOOGLE_SCRIPT_SRC}"]`,
-    )
-    const script = existingScript ?? document.createElement('script')
-    const handleLoad = () => {
-      if (isMounted) {
-        setIsGoogleReady(Boolean(window.google?.accounts?.id))
-      }
-    }
-    const handleError = () => {
-      if (isMounted) {
-        setNotice({
-          tone: 'error',
-          message: 'Google sign-in could not load. Email and password sign-in still works.',
-        })
-      }
-    }
-
-    script.addEventListener('load', handleLoad)
-    script.addEventListener('error', handleError)
-
-    if (!existingScript) {
-      script.async = true
-      script.defer = true
-      script.src = GOOGLE_SCRIPT_SRC
-      document.head.appendChild(script)
-    }
-
-    return () => {
-      isMounted = false
-      script.removeEventListener('load', handleLoad)
-      script.removeEventListener('error', handleError)
-    }
-  }, [session])
-
-  useEffect(() => {
-    const googleIdentity = window.google?.accounts?.id
-    const buttonRoot = googleButtonRef.current
-
-    if (session || !GOOGLE_CLIENT_ID || !isGoogleReady || !googleIdentity || !buttonRoot) {
-      return
-    }
-
-    activeGoogleCredentialHandler = (response) => {
-      void handleGoogleCredential(response)
-    }
-
-    if (initializedGoogleClientId !== GOOGLE_CLIENT_ID) {
-      googleIdentity.initialize({
-        auto_select: false,
-        callback: (response) => activeGoogleCredentialHandler?.(response),
-        client_id: GOOGLE_CLIENT_ID,
-      })
-      initializedGoogleClientId = GOOGLE_CLIENT_ID
-    }
-
-    buttonRoot.innerHTML = ''
-    googleIdentity.renderButton(buttonRoot, {
-      shape: 'pill',
-      size: 'large',
-      text: authMode === 'register' ? 'signup_with' : 'signin_with',
-      theme: 'outline',
-      type: 'standard',
-      width: Math.max(240, Math.min(400, Math.floor(buttonRoot.getBoundingClientRect().width))),
     })
 
     return () => {
-      activeGoogleCredentialHandler = null
+      if (recoveryTimer) {
+        window.clearTimeout(recoveryTimer)
+      }
+
+      subscription.unsubscribe()
     }
-  }, [authMode, isGoogleReady, session])
+  }, [])
 
   useEffect(() => {
     if (!session) {
@@ -514,35 +453,71 @@ function App() {
     setIsAuthenticating(true)
 
     try {
-      let nextSession: AuthSession
+      if (authMode === 'forgot-password') {
+        const payload: PasswordResetInput = {
+          email: authForm.email,
+        }
 
-      if (authMode === 'register') {
+        await webApp.requestPasswordReset(payload)
+        setAuthForm(createInitialAuthForm())
+        setAuthMode('login')
+        setNotice({
+          tone: 'success',
+          message: 'Password recovery email sent. Check your inbox for the secure reset link.',
+        })
+      } else if (authMode === 'reset-password') {
+        const payload: PasswordUpdateInput = {
+          password: authForm.password,
+        }
+        const result = await webApp.updatePassword(payload)
+
+        setAuthForm(createInitialAuthForm())
+        setNotice({
+          tone: 'success',
+          message: result.message,
+        })
+
+        if (result.session) {
+          setSession(result.session)
+        } else {
+          setAuthMode('login')
+        }
+      } else if (authMode === 'register') {
         const payload: RegisterInput = {
           name: authForm.name,
           email: authForm.email,
           password: authForm.password,
         }
 
-        nextSession = await webApp.register(payload)
+        const result = await webApp.register(payload)
+        setAuthForm(createInitialAuthForm())
         setNotice({
           tone: 'success',
-          message: 'Account created successfully.',
+          message: result.message,
         })
+
+        if (result.session) {
+          setSession(result.session)
+        } else {
+          setAuthMode('login')
+        }
       } else {
         const payload: LoginInput = {
           email: authForm.email,
           password: authForm.password,
         }
 
-        nextSession = await webApp.login(payload)
+        const result = await webApp.login(payload)
+        setAuthForm(createInitialAuthForm())
         setNotice({
           tone: 'success',
-          message: 'Signed in successfully.',
+          message: result.message,
         })
-      }
 
-      setAuthForm(createInitialAuthForm())
-      setSession(nextSession)
+        if (result.session) {
+          setSession(result.session)
+        }
+      }
     } catch (error) {
       setNotice({
         tone: 'error',
@@ -550,6 +525,24 @@ function App() {
       })
     } finally {
       setIsAuthenticating(false)
+    }
+  }
+
+  async function handleGoogleAuth() {
+    setIsGoogleAuthenticating(true)
+
+    try {
+      await webApp.loginWithGoogle()
+      setNotice({
+        tone: 'info',
+        message: 'Redirecting to Google for secure sign-in...',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      setIsGoogleAuthenticating(false)
     }
   }
 
@@ -566,7 +559,6 @@ function App() {
   async function handleLogout() {
     try {
       await webApp.logout()
-      window.google?.accounts?.id?.disableAutoSelect()
       setSession(null)
       setAppState(null)
       setSettingsForm(null)
@@ -898,68 +890,53 @@ function App() {
           <article className="panel auth-card landing-auth-card" id="account-access">
             <div className="auth-card-header">
               <span className="eyebrow">Account access</span>
-              <h2>{authMode === 'login' ? 'Welcome back' : 'Create your workspace'}</h2>
-              <p>
-                {authMode === 'login'
-                  ? 'Sign in to open your client follow-up command center.'
-                  : 'Register a new account to organize clients, proposals, appointments, and next steps.'}
-              </p>
+              <h2>{getAuthTitle(authMode)}</h2>
+              <p>{getAuthDescription(authMode)}</p>
             </div>
 
-            <div className="auth-toggle">
-              <button
-                className={`auth-toggle-button ${authMode === 'login' ? 'auth-toggle-button-active' : ''}`}
-                onClick={() => setAuthMode('login')}
-                type="button"
-              >
-                Log in
-              </button>
-              <button
-                className={`auth-toggle-button ${authMode === 'register' ? 'auth-toggle-button-active' : ''}`}
-                onClick={() => setAuthMode('register')}
-                type="button"
-              >
-                Register
-              </button>
-            </div>
+            {authMode === 'reset-password' ? null : (
+              <div className="auth-toggle">
+                <button
+                  className={`auth-toggle-button ${authMode === 'login' || authMode === 'forgot-password' ? 'auth-toggle-button-active' : ''}`}
+                  onClick={() => setAuthMode('login')}
+                  type="button"
+                >
+                  Log in
+                </button>
+                <button
+                  className={`auth-toggle-button ${authMode === 'register' ? 'auth-toggle-button-active' : ''}`}
+                  onClick={() => setAuthMode('register')}
+                  type="button"
+                >
+                  Register
+                </button>
+              </div>
+            )}
 
             {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
 
-            <div className="google-auth-section">
-              {GOOGLE_CLIENT_ID ? (
-                <>
-                  <div
-                    aria-label={
-                      authMode === 'login' ? 'Sign in with Google' : 'Sign up with Google'
-                    }
-                    className={`google-auth-button ${
-                      isGoogleAuthenticating ? 'google-auth-button-busy' : ''
-                    }`}
-                    ref={googleButtonRef}
-                  ></div>
+            {authMode === 'login' || authMode === 'register' ? (
+              <>
+                <div className="google-auth-section">
+                  <button
+                    className="google-auth-action"
+                    disabled={isGoogleAuthenticating}
+                    onClick={() => void handleGoogleAuth()}
+                    type="button"
+                  >
+                    {isGoogleAuthenticating ? 'Redirecting to Google...' : 'Continue with Google'}
+                  </button>
 
-                  {!isGoogleReady ? (
-                    <button className="google-auth-loading" disabled type="button">
-                      Loading Google sign-in...
-                    </button>
-                  ) : null}
-                </>
-              ) : (
-                <button className="google-auth-loading" disabled type="button">
-                  Continue with Google
-                </button>
-              )}
+                  <p className="google-auth-hint">
+                    Google sign-in is handled securely by Supabase Auth.
+                  </p>
+                </div>
 
-              <p className="google-auth-hint">
-                {GOOGLE_CLIENT_ID
-                  ? 'Use your Gmail or Google account. New users get a workspace automatically.'
-                  : 'Add VITE_GOOGLE_CLIENT_ID to enable Gmail account access.'}
-              </p>
-            </div>
-
-            <div className="auth-divider">
-              <span>or continue with email</span>
-            </div>
+                <div className="auth-divider">
+                  <span>or continue with email</span>
+                </div>
+              </>
+            ) : null}
 
             <form className="stack-form" onSubmit={handleAuthSubmit}>
               {authMode === 'register' ? (
@@ -977,41 +954,63 @@ function App() {
                 </label>
               ) : null}
 
-              <label className="field">
-                <span>Email address</span>
-                <input
-                  onChange={(event) =>
-                    setAuthForm((current) => ({ ...current, email: event.target.value }))
-                  }
-                  placeholder="you@company.com"
-                  required
-                  type="email"
-                  value={authForm.email}
-                />
-              </label>
+              {authMode === 'reset-password' ? null : (
+                <label className="field">
+                  <span>Email address</span>
+                  <input
+                    onChange={(event) =>
+                      setAuthForm((current) => ({ ...current, email: event.target.value }))
+                    }
+                    placeholder="you@company.com"
+                    required
+                    type="email"
+                    value={authForm.email}
+                  />
+                </label>
+              )}
 
-              <label className="field">
-                <span>Password</span>
-                <input
-                  minLength={8}
-                  onChange={(event) =>
-                    setAuthForm((current) => ({ ...current, password: event.target.value }))
-                  }
-                  placeholder="Minimum 8 characters"
-                  required
-                  type="password"
-                  value={authForm.password}
-                />
-              </label>
+              {authMode === 'forgot-password' ? null : (
+                <label className="field">
+                  <span>{authMode === 'reset-password' ? 'New password' : 'Password'}</span>
+                  <input
+                    minLength={8}
+                    onChange={(event) =>
+                      setAuthForm((current) => ({ ...current, password: event.target.value }))
+                    }
+                    placeholder="Minimum 8 characters"
+                    required
+                    type="password"
+                    value={authForm.password}
+                  />
+                </label>
+              )}
 
-              <button className="primary-button full-width" disabled={isAuthenticating} type="submit">
-                {isAuthenticating
-                  ? authMode === 'login'
-                    ? 'Signing in...'
-                    : 'Creating account...'
-                  : authMode === 'login'
-                    ? 'Log in'
-                    : 'Create account'}
+              {authMode === 'login' ? (
+                <button
+                  className="auth-link-button"
+                  onClick={() => setAuthMode('forgot-password')}
+                  type="button"
+                >
+                  Forgot your password?
+                </button>
+              ) : null}
+
+              {authMode === 'forgot-password' || authMode === 'reset-password' ? (
+                <button
+                  className="auth-link-button"
+                  onClick={() => setAuthMode('login')}
+                  type="button"
+                >
+                  Back to log in
+                </button>
+              ) : null}
+
+              <button
+                className="primary-button full-width"
+                disabled={isAuthenticating}
+                type="submit"
+              >
+                {getAuthSubmitLabel(authMode, isAuthenticating)}
               </button>
             </form>
           </article>

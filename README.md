@@ -18,20 +18,32 @@ npm install
 npm run dev
 ```
 
-## Acceso con Gmail / Google
+## Supabase Auth
 
-Para activar el boton de acceso con Google:
+La app usa Supabase Auth para registro, inicio de sesion, Google OAuth y recuperacion de contrasena.
 
-1. Crea un OAuth Client ID de tipo `Web application` en Google Cloud.
-2. Agrega tus origenes autorizados, por ejemplo `http://localhost:5173` para desarrollo.
-3. Crea un archivo `.env.local` basado en `.env.example`.
-4. Reinicia el servidor de Vite.
+1. Crea un proyecto en Supabase.
+2. Copia `Project URL` y `anon public key` desde `Project Settings > API`.
+3. Crea `.env.local` basado en `.env.example`.
+4. En Supabase, agrega tus URLs en `Authentication > URL Configuration`.
+5. Reinicia el servidor de Vite.
 
 ```bash
-VITE_GOOGLE_CLIENT_ID=tu-client-id.apps.googleusercontent.com
+VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
+VITE_SUPABASE_ANON_KEY=tu-anon-key
 ```
 
-El acceso con Google crea automaticamente el usuario la primera vez y luego reutiliza el mismo workspace local.
+URLs recomendadas para desarrollo:
+
+- `Site URL`: `http://localhost:5173`
+- `Redirect URLs`: `http://localhost:5173`, `http://localhost:5173/**`
+
+Para Vercel agrega tambien tu dominio de produccion, por ejemplo:
+
+- `https://hessaenterprises.vercel.app`
+- `https://hessaenterprises.vercel.app/**`
+
+Para activar Google, configura el proveedor en `Authentication > Providers > Google` dentro de Supabase.
 
 ## Build
 

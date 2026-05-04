@@ -1,4 +1,5 @@
 import type {
+  AuthActionResult,
   AppOperationResponse,
   AppState,
   AuthSession,
@@ -6,17 +7,18 @@ import type {
   ClientInput,
   ClientRecord,
   FollowUpHistoryItem,
-  GoogleAuthInput,
-  GoogleAuthSession,
   LoginInput,
+  PasswordResetInput,
+  PasswordUpdateInput,
   RegisterInput,
   RuntimeInfo,
   SettingsInput,
   SettingsState,
 } from './types'
+import type { User } from '@supabase/supabase-js'
+import { getSupabaseClient } from './supabaseClient'
 
 const LEGACY_STORAGE_KEY = 'hessa-followup-web'
-const AUTH_STORAGE_KEY = 'hessa-followup-web:auth'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
 const MAX_CONTACTS = 4
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
@@ -30,17 +32,6 @@ type Database = {
   version: number
   settings: SettingsState
   clients: ClientRecord[]
-}
-
-type StoredUser = AuthUser & {
-  googleSubject: string | null
-  passwordHash: string | null
-}
-
-type AuthStore = {
-  version: number
-  sessionUserId: string | null
-  users: StoredUser[]
 }
 
 function createDefaultTemplates() {
@@ -103,12 +94,6 @@ const defaultDatabase: Database = Object.freeze({
   clients: [],
 })
 
-const defaultAuthStore: AuthStore = Object.freeze({
-  version: 1,
-  sessionUserId: null,
-  users: [],
-})
-
 function createId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -121,86 +106,12 @@ function cloneDefaultDatabase() {
   return JSON.parse(JSON.stringify(defaultDatabase)) as Database
 }
 
-function cloneDefaultAuthStore() {
-  return JSON.parse(JSON.stringify(defaultAuthStore)) as AuthStore
-}
-
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
 
 function toStoredEmail(email: string) {
   return email.trim().toLowerCase()
-}
-
-function decodeBase64Url(value: string) {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
-  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=')
-  const binary = window.atob(padded)
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-  return new TextDecoder().decode(bytes)
-}
-
-function getStringClaim(payload: Record<string, unknown>, claim: string) {
-  const value = payload[claim]
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function decodeGoogleCredential({ clientId, credential }: GoogleAuthInput) {
-  const [, encodedPayload] = credential.split('.')
-
-  if (!encodedPayload) {
-    throw new Error('Google sign-in returned an invalid credential.')
-  }
-
-  let payload: Record<string, unknown>
-
-  try {
-    const decodedPayload = JSON.parse(decodeBase64Url(encodedPayload))
-    payload =
-      decodedPayload && typeof decodedPayload === 'object'
-        ? (decodedPayload as Record<string, unknown>)
-        : Object.create(null)
-  } catch {
-    throw new Error('Google sign-in returned a credential we could not read.')
-  }
-
-  const issuer = getStringClaim(payload, 'iss')
-
-  if (issuer !== 'accounts.google.com' && issuer !== 'https://accounts.google.com') {
-    throw new Error('Google sign-in returned a credential from an unknown issuer.')
-  }
-
-  if (getStringClaim(payload, 'aud') !== clientId) {
-    throw new Error('Google sign-in was issued for a different app.')
-  }
-
-  if (typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now()) {
-    throw new Error('Google sign-in expired. Please try again.')
-  }
-
-  const googleSubject = getStringClaim(payload, 'sub')
-  const email = toStoredEmail(getStringClaim(payload, 'email'))
-  const name =
-    getStringClaim(payload, 'name') || getStringClaim(payload, 'given_name') || email.split('@')[0]
-
-  if (!googleSubject) {
-    throw new Error('Google sign-in did not include an account identifier.')
-  }
-
-  if (!isValidEmail(email)) {
-    throw new Error('Google sign-in did not include a valid email address.')
-  }
-
-  if (payload.email_verified !== true) {
-    throw new Error('Google sign-in did not verify this email address.')
-  }
-
-  return {
-    email,
-    googleSubject,
-    name,
-  }
 }
 
 function clampTargetContacts(value: unknown) {
@@ -444,93 +355,41 @@ function normalizeDatabase(rawData: unknown): Database {
   return database
 }
 
-function normalizeStoredUser(rawUser: unknown): StoredUser | null {
-  const normalized = rawUser && typeof rawUser === 'object' ? rawUser : Object.create(null)
+function getRedirectUrl(mode?: 'reset-password') {
+  const url = new URL(window.location.href)
+  url.search = ''
+  url.hash = ''
 
-  if (
-    !('id' in normalized) ||
-    typeof normalized.id !== 'string' ||
-    !('name' in normalized) ||
-    typeof normalized.name !== 'string' ||
-    !('email' in normalized) ||
-    typeof normalized.email !== 'string' ||
-    !('createdAt' in normalized) ||
-    typeof normalized.createdAt !== 'string'
-  ) {
-    return null
+  if (mode) {
+    url.searchParams.set('auth', mode)
   }
 
-  const passwordHash =
-    'passwordHash' in normalized && typeof normalized.passwordHash === 'string'
-      ? normalized.passwordHash
-      : null
-  const googleSubject =
-    'googleSubject' in normalized && typeof normalized.googleSubject === 'string'
-      ? normalized.googleSubject
-      : null
+  return url.toString()
+}
 
-  if (!passwordHash && !googleSubject) {
-    return null
-  }
+function getUserDisplayName(user: User) {
+  const metadata = user.user_metadata
+  const name =
+    typeof metadata.name === 'string'
+      ? metadata.name
+      : typeof metadata.full_name === 'string'
+        ? metadata.full_name
+        : ''
 
+  return name.trim() || user.email?.split('@')[0] || 'Hessa user'
+}
+
+function toPublicUser(user: User): AuthUser {
   return {
-    id: normalized.id,
-    name: normalized.name.trim(),
-    email: toStoredEmail(normalized.email),
-    createdAt: normalized.createdAt,
-    googleSubject,
-    passwordHash,
+    id: user.id,
+    name: getUserDisplayName(user),
+    email: user.email ?? '',
+    createdAt: user.created_at,
   }
 }
 
-function normalizeAuthStore(rawData: unknown): AuthStore {
-  const authStore = cloneDefaultAuthStore()
-  const normalized = rawData && typeof rawData === 'object' ? rawData : Object.create(null)
-  const normalizedUsers =
-    'users' in normalized && Array.isArray(normalized.users)
-      ? normalized.users
-          .map(normalizeStoredUser)
-          .filter((user: StoredUser | null): user is StoredUser => user !== null)
-      : []
-
-  authStore.version =
-    'version' in normalized && Number.isInteger(normalized.version) && normalized.version > 0
-      ? normalized.version
-      : 1
-  authStore.users = normalizedUsers
-  authStore.sessionUserId =
-    'sessionUserId' in normalized && typeof normalized.sessionUserId === 'string'
-      ? normalized.sessionUserId
-      : null
-
-  if (
-    authStore.sessionUserId &&
-    !authStore.users.some((user) => user.id === authStore.sessionUserId)
-  ) {
-    authStore.sessionUserId = null
-  }
-
-  return authStore
-}
-
-function loadAuthStore() {
-  try {
-    const stored = window.localStorage.getItem(AUTH_STORAGE_KEY)
-
-    if (!stored) {
-      return cloneDefaultAuthStore()
-    }
-
-    return normalizeAuthStore(JSON.parse(stored))
-  } catch {
-    return cloneDefaultAuthStore()
-  }
-}
-
-function saveAuthStore(authStore: AuthStore) {
-  const normalized = normalizeAuthStore(authStore)
-  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(normalized))
-  return normalized
+function toAuthSession(user: User | null | undefined): AuthSession | null {
+  return user ? { user: toPublicUser(user) } : null
 }
 
 function getWorkspaceStorageKey(userId: string) {
@@ -565,51 +424,23 @@ function saveDatabaseForUser(userId: string, database: Database) {
   return saveDatabaseByKey(getWorkspaceStorageKey(userId), database)
 }
 
-function toPublicUser(user: StoredUser): AuthUser {
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    createdAt: user.createdAt,
-  }
-}
+async function requireSession() {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase.auth.getUser()
 
-function getSessionFromStore(authStore: AuthStore): AuthSession | null {
-  if (!authStore.sessionUserId) {
-    return null
+  if (error) {
+    throw new Error(error.message)
   }
 
-  const user = authStore.users.find((item) => item.id === authStore.sessionUserId)
-
-  if (!user) {
-    return null
-  }
-
-  return { user: toPublicUser(user) }
-}
-
-function requireSession() {
-  const authStore = loadAuthStore()
-  const session = getSessionFromStore(authStore)
+  const session = toAuthSession(data.user)
 
   if (!session) {
     throw new Error('Please sign in to continue.')
   }
 
   return {
-    authStore,
     session,
   }
-}
-
-async function hashPassword(password: string) {
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const encoded = new TextEncoder().encode(password)
-    const buffer = await crypto.subtle.digest('SHA-256', encoded)
-    return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, '0')).join('')
-  }
-
-  return password
 }
 
 function migrateLegacyWorkspaceToUser(userId: string) {
@@ -968,10 +799,17 @@ function buildOperationResponse(
 
 export const webApp = {
   async getSession() {
-    return getSessionFromStore(loadAuthStore())
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase.auth.getSession()
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return toAuthSession(data.session?.user)
   },
 
-  async register(registerInput: RegisterInput) {
+  async register(registerInput: RegisterInput): Promise<AuthActionResult> {
     const name = registerInput.name.trim()
     const email = toStoredEmail(registerInput.email)
     const password = registerInput.password
@@ -988,36 +826,38 @@ export const webApp = {
       throw new Error('Password must be at least 8 characters long.')
     }
 
-    const authStore = loadAuthStore()
-
-    if (authStore.users.some((user) => user.email === email)) {
-      throw new Error('An account with this email already exists.')
-    }
-
-    const createdAt = new Date().toISOString()
-    const newUser: StoredUser = {
-      id: createId(),
-      name,
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase.auth.signUp({
       email,
-      createdAt,
-      googleSubject: null,
-      passwordHash: await hashPassword(password),
+      password,
+      options: {
+        data: {
+          full_name: name,
+          name,
+        },
+        emailRedirectTo: getRedirectUrl(),
+      },
+    })
+
+    if (error) {
+      throw new Error(error.message)
     }
 
-    authStore.users.push(newUser)
-    authStore.sessionUserId = newUser.id
-    saveAuthStore(authStore)
+    const nextSession = toAuthSession(data.session?.user)
 
-    if (authStore.users.length === 1) {
-      migrateLegacyWorkspaceToUser(newUser.id)
+    if (nextSession) {
+      migrateLegacyWorkspaceToUser(nextSession.user.id)
     }
 
     return {
-      user: toPublicUser(newUser),
+      message: nextSession
+        ? 'Account created successfully.'
+        : 'Account created. Check your email to confirm your address before signing in.',
+      session: nextSession,
     }
   },
 
-  async login(loginInput: LoginInput) {
+  async login(loginInput: LoginInput): Promise<AuthActionResult> {
     const email = toStoredEmail(loginInput.email)
     const password = loginInput.password
 
@@ -1029,98 +869,97 @@ export const webApp = {
       throw new Error('Password is required.')
     }
 
-    const authStore = loadAuthStore()
-    const user = authStore.users.find((item) => item.email === email)
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
 
-    if (!user) {
-      throw new Error('No account was found for this email.')
+    if (error) {
+      throw new Error(error.message)
     }
 
-    if (!user.passwordHash) {
-      throw new Error('This account uses Google sign-in. Continue with Google instead.')
-    }
+    const nextSession = toAuthSession(data.user)
 
-    const attemptedHash = await hashPassword(password)
-
-    if (attemptedHash !== user.passwordHash) {
-      throw new Error('Incorrect password.')
-    }
-
-    authStore.sessionUserId = user.id
-    saveAuthStore(authStore)
-
-    if (authStore.users.length === 1) {
-      migrateLegacyWorkspaceToUser(user.id)
+    if (nextSession) {
+      migrateLegacyWorkspaceToUser(nextSession.user.id)
     }
 
     return {
-      user: toPublicUser(user),
+      message: 'Signed in successfully.',
+      session: nextSession,
     }
   },
 
-  async continueWithGoogle(googleInput: GoogleAuthInput): Promise<GoogleAuthSession> {
-    const googleAccount = decodeGoogleCredential(googleInput)
-    const authStore = loadAuthStore()
-    const userBySubject = authStore.users.find(
-      (item) => item.googleSubject === googleAccount.googleSubject,
-    )
-    const userByEmail = authStore.users.find((item) => item.email === googleAccount.email)
+  async loginWithGoogle() {
+    const supabase = getSupabaseClient()
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: getRedirectUrl(),
+      },
+    })
 
-    if (userBySubject && userByEmail && userBySubject.id !== userByEmail.id) {
-      throw new Error('This Google account conflicts with another saved user.')
+    if (error) {
+      throw new Error(error.message)
+    }
+  },
+
+  async requestPasswordReset(resetInput: PasswordResetInput) {
+    const email = toStoredEmail(resetInput.email)
+
+    if (!isValidEmail(email)) {
+      throw new Error('Please enter a valid email address.')
     }
 
-    let isNewUser = false
-    let user = userBySubject ?? userByEmail
+    const supabase = getSupabaseClient()
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: getRedirectUrl('reset-password'),
+    })
 
-    if (!user) {
-      isNewUser = true
-      user = {
-        id: createId(),
-        name: googleAccount.name,
-        email: googleAccount.email,
-        createdAt: new Date().toISOString(),
-        googleSubject: googleAccount.googleSubject,
-        passwordHash: null,
-      }
-      authStore.users.push(user)
-    } else if (user.googleSubject && user.googleSubject !== googleAccount.googleSubject) {
-      throw new Error('This email is already connected to a different Google account.')
-    } else {
-      user.googleSubject = googleAccount.googleSubject
-      user.email = googleAccount.email
+    if (error) {
+      throw new Error(error.message)
+    }
+  },
 
-      if (!user.name.trim()) {
-        user.name = googleAccount.name
-      }
+  async updatePassword(updateInput: PasswordUpdateInput): Promise<AuthActionResult> {
+    const password = updateInput.password
+
+    if (password.trim().length < 8) {
+      throw new Error('Password must be at least 8 characters long.')
     }
 
-    authStore.sessionUserId = user.id
-    saveAuthStore(authStore)
+    const supabase = getSupabaseClient()
+    const { data, error } = await supabase.auth.updateUser({
+      password,
+    })
 
-    if (authStore.users.length === 1) {
-      migrateLegacyWorkspaceToUser(user.id)
+    if (error) {
+      throw new Error(error.message)
     }
 
     return {
-      isNewUser,
-      user: toPublicUser(user),
+      message: 'Password updated successfully.',
+      session: toAuthSession(data.user),
     }
   },
 
   async logout() {
-    const authStore = loadAuthStore()
-    authStore.sessionUserId = null
-    saveAuthStore(authStore)
+    const supabase = getSupabaseClient()
+    const { error } = await supabase.auth.signOut()
+
+    if (error) {
+      throw new Error(error.message)
+    }
   },
 
   async getAppState() {
-    const { session } = requireSession()
+    const { session } = await requireSession()
     return getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user)
   },
 
   async saveSettings(incomingSettings: SettingsInput) {
-    const { session } = requireSession()
+    const { session } = await requireSession()
     const database = loadDatabaseForUser(session.user.id)
     database.settings = mergeSettings(database.settings, incomingSettings)
     const persisted = persistDatabase(session.user.id, database)
@@ -1137,7 +976,7 @@ export const webApp = {
   },
 
   async createClient(clientInput: ClientInput) {
-    const { session } = requireSession()
+    const { session } = await requireSession()
     const name = clientInput.name.trim()
     const email = clientInput.email.trim().toLowerCase()
     const company = clientInput.company.trim()
@@ -1210,7 +1049,7 @@ export const webApp = {
   },
 
   async processDueFollowUps() {
-    const { session } = requireSession()
+    const { session } = await requireSession()
     const database = loadDatabaseForUser(session.user.id)
     const candidates = selectClientsForProcessing(database.clients)
 
@@ -1252,7 +1091,7 @@ export const webApp = {
       throw new Error('A client must be selected before opening a draft.')
     }
 
-    const { session } = requireSession()
+    const { session } = await requireSession()
     const database = loadDatabaseForUser(session.user.id)
     const client = database.clients.find((item) => item.id === clientId)
 
@@ -1279,7 +1118,7 @@ export const webApp = {
   },
 
   async updateClientStatus(clientId: string, nextStatus: ClientRecord['status']) {
-    const { session } = requireSession()
+    const { session } = await requireSession()
     const database = loadDatabaseForUser(session.user.id)
     const client = database.clients.find((item) => item.id === clientId)
 
@@ -1333,7 +1172,7 @@ export const webApp = {
       throw new Error('A client must be selected before deletion.')
     }
 
-    const { session } = requireSession()
+    const { session } = await requireSession()
     const database = loadDatabaseForUser(session.user.id)
     const clientIndex = database.clients.findIndex((item) => item.id === clientId)
 

@@ -15,6 +15,11 @@ export type AuthSession = {
   user: AuthUser
 }
 
+export type AuthActionResult = {
+  message: string
+  session: AuthSession | null
+}
+
 export type FollowUpStatus = 'prepared' | 'failed'
 export type ClientStatus = 'active' | 'finished' | 'canceled'
 
@@ -128,11 +133,10 @@ export type RegisterInput = {
   password: string
 }
 
-export type GoogleAuthInput = {
-  clientId: string
-  credential: string
+export type PasswordResetInput = {
+  email: string
 }
 
-export type GoogleAuthSession = AuthSession & {
-  isNewUser: boolean
+export type PasswordUpdateInput = {
+  password: string
 }
