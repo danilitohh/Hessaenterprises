@@ -22,7 +22,7 @@ export type AuthActionResult = {
 
 export type FollowUpStatus = 'prepared' | 'failed'
 export type ClientStatus = 'active' | 'finished' | 'canceled'
-export type ProposalStatus = 'approved' | 'declined' | 'pending' | 'sent'
+export type ProposalStatus = 'active' | 'finished' | 'canceled'
 
 export type EmailTemplate = {
   id: string
@@ -67,15 +67,12 @@ export type ProposalRecord = {
   clientName: string
   email: string
   company: string
-  projectName: string
-  proposalValue: number
   notes: string
   status: ProposalStatus
-  sentAt: string
   createdAt: string
   updatedAt: string
-  approvedAt: string | null
-  declinedAt: string | null
+  canceledAt: string | null
+  finishedAt: string | null
   nextFollowUpAt: string | null
   lastFollowUpAt: string | null
   lastError: string | null
@@ -139,12 +136,7 @@ export type ProposalInput = {
   clientName: string
   email: string
   company: string
-  projectName: string
-  proposalValue: number
   notes: string
-  sentAt: string
-  nextFollowUpAt: string
-  status: ProposalStatus
   targetFollowUps: number
   followUpScheduleTimes: string[]
 }

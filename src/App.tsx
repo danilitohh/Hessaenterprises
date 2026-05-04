@@ -99,13 +99,7 @@ type ProposalFormState = {
   company: string
   email: string
   followUpScheduleTimes: string[]
-  nextFollowUpDate: string
-  nextFollowUpTime: string
   notes: string
-  projectName: string
-  proposalValue: string
-  sentDate: string
-  status: ProposalStatus
   targetFollowUps: number
 }
 
@@ -120,25 +114,13 @@ function createInitialClientForm(): ClientInput {
   }
 }
 
-function toDateInputValue(date: Date) {
-  return date.toISOString().slice(0, 10)
-}
-
 function createInitialProposalForm(): ProposalFormState {
-  const today = toDateInputValue(new Date())
-
   return {
     clientName: '',
     company: '',
     email: '',
     followUpScheduleTimes: [...DEFAULT_SCHEDULE_TIMES],
-    nextFollowUpDate: today,
-    nextFollowUpTime: '09:00',
     notes: '',
-    projectName: '',
-    proposalValue: '',
-    sentDate: today,
-    status: 'sent',
     targetFollowUps: 4,
   }
 }
@@ -249,13 +231,6 @@ function formatDateTime(isoDate: string | null) {
   }).format(new Date(isoDate))
 }
 
-function combineDateAndTime(dateValue: string, timeValue = '09:00') {
-  const [hours, minutes] = timeValue.split(':').map(Number)
-  const date = new Date(`${dateValue}T00:00:00`)
-  date.setHours(Number.isFinite(hours) ? hours : 9, Number.isFinite(minutes) ? minutes : 0, 0, 0)
-  return date.toISOString()
-}
-
 function formatRelativeDue(isoDate: string | null) {
   if (!isoDate) {
     return 'Not scheduled'
@@ -294,19 +269,15 @@ function getClientStageLabel(client: ClientRecord) {
 }
 
 function getProposalStatusLabel(status: ProposalStatus) {
-  if (status === 'approved') {
-    return 'Approved'
+  if (status === 'finished') {
+    return 'Completed'
   }
 
-  if (status === 'declined') {
-    return 'Declined'
+  if (status === 'canceled') {
+    return 'Paused'
   }
 
-  if (status === 'pending') {
-    return 'Pending'
-  }
-
-  return 'Sent'
+  return 'Active'
 }
 
 function getProposalPriority(proposal: ProposalRecord): DashboardPriority {
@@ -333,7 +304,7 @@ function createProposalAttemptStatuses(proposal: ProposalRecord) {
       return 'done'
     }
 
-    if (proposal.status === 'approved' || proposal.status === 'declined') {
+    if (proposal.status === 'canceled') {
       return 'stopped'
     }
 
@@ -459,14 +430,6 @@ const dashboardNavItems = [
   { href: 'settings', label: 'Settings' },
 ]
 
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat('en-US', {
-    currency: 'USD',
-    maximumFractionDigits: 0,
-    style: 'currency',
-  }).format(amount)
-}
-
 function getInitials(name: string) {
   return name
     .split(' ')
@@ -506,7 +469,7 @@ function isOverdue(isoDate: string | null) {
 }
 
 function isOpenProposal(proposal: ProposalRecord) {
-  return proposal.status !== 'approved' && proposal.status !== 'declined'
+  return proposal.status === 'active'
 }
 
 function isProposalFollowUpDue(proposal: ProposalRecord) {
@@ -1321,15 +1284,7 @@ function App() {
       clientName: proposalForm.clientName,
       email: proposalForm.email,
       company: proposalForm.company,
-      projectName: proposalForm.projectName,
-      proposalValue: Number(proposalForm.proposalValue) || 0,
       notes: proposalForm.notes,
-      sentAt: combineDateAndTime(proposalForm.sentDate, '12:00'),
-      nextFollowUpAt: combineDateAndTime(
-        proposalForm.nextFollowUpDate,
-        proposalForm.nextFollowUpTime,
-      ),
-      status: proposalForm.status,
       targetFollowUps: proposalForm.targetFollowUps,
       followUpScheduleTimes: proposalForm.followUpScheduleTimes,
     }
@@ -2041,10 +1996,8 @@ function App() {
   const dueTodayClients = sortedActiveClients.filter((client) => isDueToday(client.nextContactAt))
   const overdueClients = sortedActiveClients.filter((client) => isOverdue(client.nextContactAt))
   const openProposals = appState.proposals.filter(isOpenProposal)
-  const approvedProposals = appState.proposals.filter((proposal) => proposal.status === 'approved')
-  const declinedProposals = appState.proposals.filter((proposal) => proposal.status === 'declined')
-  const sentProposals = appState.proposals.filter((proposal) => proposal.status === 'sent')
-  const pendingProposals = appState.proposals.filter((proposal) => proposal.status === 'pending')
+  const finishedProposals = appState.proposals.filter((proposal) => proposal.status === 'finished')
+  const pausedProposals = appState.proposals.filter((proposal) => proposal.status === 'canceled')
   const sortedOpenProposals = [...openProposals].sort((first, second) =>
     compareNullableDates(first.nextFollowUpAt, second.nextFollowUpAt),
   )
@@ -2102,10 +2055,8 @@ function App() {
       proposal.clientName,
       proposal.company,
       proposal.email,
-      proposal.projectName,
       proposal.notes,
       proposal.status,
-      String(proposal.proposalValue),
     ]
       .join(' ')
       .toLowerCase()
@@ -2142,9 +2093,6 @@ function App() {
   const activityItems = recentActivityFromClients.length
     ? recentActivityFromClients
     : createMockActivityItems()
-  const estimatedProposalAmount = usingMockDashboardData
-    ? mockFollowUpCards.reduce((total, card) => total + card.proposalAmount, 0)
-    : openProposals.reduce((total, proposal) => total + proposal.proposalValue, 0)
   const kpiCards = [
     {
       helper: usingMockDashboardData ? 'Demo queue until your first client is saved' : 'Scheduled for today',
@@ -2159,49 +2107,43 @@ function App() {
     },
     {
       helper: usingMockDashboardData
-        ? 'Demo proposal pipeline'
+        ? 'Demo proposal follow-up queue'
         : `${dueProposalFollowUps.length} proposal follow-ups due now`,
-      label: 'Active proposals',
+      label: 'Active proposal follow-ups',
       value: String(usingMockDashboardData ? 7 : openProposals.length),
     },
     {
       helper: usingMockDashboardData
-        ? 'Demo estimate only'
-        : 'Open sent and pending proposals',
-      label: 'Estimated proposal value',
+        ? 'Demo proposal reminders'
+        : 'Proposal emails ready to send today',
+      label: 'Proposal emails due',
       tone: 'accent',
-      value: formatCurrency(estimatedProposalAmount),
+      value: String(usingMockDashboardData ? 4 : dueTodayProposals.length + overdueProposals.length),
     },
   ]
   const proposalPipeline = [
     {
-      count: usingMockDashboardData ? 4 : sentProposals.length,
-      label: 'Sent',
-      value: usingMockDashboardData
-        ? '$48K'
-        : formatCurrency(sentProposals.reduce((total, proposal) => total + proposal.proposalValue, 0)),
+      count: usingMockDashboardData ? 4 : openProposals.length,
+      label: 'Active',
+      value: 'Proposal follow-ups in progress',
     },
     {
-      count: usingMockDashboardData ? 2 : pendingProposals.length,
-      label: 'Pending',
+      count: usingMockDashboardData ? 2 : dueProposalFollowUps.length,
+      label: 'Due now',
       tone: 'warning',
-      value: `${dueTodayProposals.length + overdueProposals.length} need next step`,
+      value: 'Ready for the next email',
     },
     {
-      count: usingMockDashboardData ? 1 : approvedProposals.length,
-      label: 'Approved',
+      count: usingMockDashboardData ? 1 : finishedProposals.length,
+      label: 'Completed',
       tone: 'success',
-      value: formatCurrency(
-        approvedProposals.reduce((total, proposal) => total + proposal.proposalValue, 0),
-      ),
+      value: 'Sequence completed',
     },
     {
-      count: usingMockDashboardData ? 1 : declinedProposals.length,
-      label: 'Declined',
+      count: usingMockDashboardData ? 1 : pausedProposals.length,
+      label: 'Paused',
       tone: 'danger',
-      value: formatCurrency(
-        declinedProposals.reduce((total, proposal) => total + proposal.proposalValue, 0),
-      ),
+      value: 'Stopped manually',
     },
   ]
 
@@ -2482,7 +2424,7 @@ function App() {
           <div className="dashboard-card-header">
             <div>
               <span className="eyebrow">Proposals</span>
-              <h2>Proposal follow-up workspace</h2>
+              <h2>Proposal follow-ups</h2>
             </div>
             <div className="proposal-header-actions">
               <span className="section-count">{filteredProposals.length}</span>
@@ -2497,15 +2439,15 @@ function App() {
                     ? 'Sending...'
                     : 'Opening...'
                   : gmailConnection?.connected
-                    ? 'Send due proposal'
-                    : 'Open due draft'}
+                    ? 'Send due proposal follow-up'
+                    : 'Open due proposal draft'}
               </button>
             </div>
           </div>
 
           <p className="dashboard-card-copy">
-            Add proposals that have already been sent, schedule the next check-in, and send those
-            proposal follow-up emails from the connected Gmail account when they are due.
+            This works like regular follow-ups, but the email copy is only about checking in on the
+            proposal that was already sent.
           </p>
 
           <div className="proposal-workspace-grid">
@@ -2513,8 +2455,8 @@ function App() {
               <div className="studio-heading">
                 <span className="section-index">02</span>
                 <div>
-                  <span className="eyebrow">Sent proposal</span>
-                  <h3>Add proposal to follow up</h3>
+                  <span className="eyebrow">Proposal sequence</span>
+                  <h3>Create a new proposal follow-up</h3>
                 </div>
               </div>
 
@@ -2562,98 +2504,9 @@ function App() {
                   </label>
                 </div>
 
-                <label className="field">
-                  <span>Project / proposal name</span>
-                  <input
-                    onChange={(event) =>
-                      setProposalForm((current) => ({
-                        ...current,
-                        projectName: event.target.value,
-                      }))
-                    }
-                    placeholder="Commercial roof replacement"
-                    required
-                    type="text"
-                    value={proposalForm.projectName}
-                  />
-                </label>
-
-                <div className="field-row">
-                  <label className="field">
-                    <span>Proposal value</span>
-                    <input
-                      inputMode="decimal"
-                      min="0"
-                      onChange={(event) =>
-                        setProposalForm((current) => ({
-                          ...current,
-                          proposalValue: event.target.value,
-                        }))
-                      }
-                      placeholder="24500"
-                      type="number"
-                      value={proposalForm.proposalValue}
-                    />
-                  </label>
-
-                  <label className="field">
-                    <span>Status</span>
-                    <select
-                      className="select-input"
-                      onChange={(event) =>
-                        setProposalForm((current) => ({
-                          ...current,
-                          status: event.target.value as ProposalStatus,
-                        }))
-                      }
-                      value={proposalForm.status}
-                    >
-                      <option value="sent">Sent</option>
-                      <option value="pending">Pending</option>
-                      <option value="approved">Approved</option>
-                      <option value="declined">Declined</option>
-                    </select>
-                  </label>
-                </div>
-
-                <div className="field-row">
-                  <label className="field">
-                    <span>Proposal sent date</span>
-                    <input
-                      onChange={(event) =>
-                        setProposalForm((current) => ({
-                          ...current,
-                          sentDate: event.target.value,
-                        }))
-                      }
-                      required
-                      type="date"
-                      value={proposalForm.sentDate}
-                    />
-                  </label>
-
-                  <label className="field">
-                    <span>Next follow-up date</span>
-                    <input
-                      disabled={
-                        proposalForm.status === 'approved' || proposalForm.status === 'declined'
-                      }
-                      onChange={(event) =>
-                        setProposalForm((current) => ({
-                          ...current,
-                          nextFollowUpDate: event.target.value,
-                        }))
-                      }
-                      required={proposalForm.status === 'sent' || proposalForm.status === 'pending'}
-                      type="date"
-                      value={proposalForm.nextFollowUpDate}
-                    />
-                  </label>
-                </div>
-
                 <div className="composer-topline">
                   <label className="field compact-field">
-                    <span>Follow-ups</span>
+                    <span>Max touchpoints</span>
                     <select
                       className="select-input"
                       onChange={(event) => updateProposalSchedule(Number(event.target.value))}
@@ -2670,23 +2523,11 @@ function App() {
                     </select>
                   </label>
 
-                  <label className="field compact-field">
-                    <span>Next send time</span>
-                    <input
-                      disabled={
-                        proposalForm.status === 'approved' || proposalForm.status === 'declined'
-                      }
-                      onChange={(event) =>
-                        setProposalForm((current) => ({
-                          ...current,
-                          nextFollowUpTime: event.target.value,
-                        }))
-                      }
-                      required={proposalForm.status === 'sent' || proposalForm.status === 'pending'}
-                      type="time"
-                      value={proposalForm.nextFollowUpTime}
-                    />
-                  </label>
+                  <div className="composer-note">
+                    <span>Sequence timing</span>
+                    <strong>{settingsForm.intervalDays} days between proposal follow-ups</strong>
+                    <small>Each slot below sets the send time for that step in the sequence.</small>
+                  </div>
                 </div>
 
                 <div className="schedule-board">
@@ -2712,19 +2553,19 @@ function App() {
                 </div>
 
                 <label className="field">
-                  <span>Internal proposal notes</span>
+                  <span>Internal notes</span>
                   <textarea
                     onChange={(event) =>
                       setProposalForm((current) => ({ ...current, notes: event.target.value }))
                     }
-                    placeholder="Decision maker, objections, proposal terms, next steps..."
+                    placeholder="Context, timing, decision maker, next step..."
                     rows={4}
                     value={proposalForm.notes}
                   />
                 </label>
 
                 <button className="primary-button full-width" disabled={isSubmittingProposal} type="submit">
-                  {isSubmittingProposal ? 'Saving proposal...' : 'Save proposal'}
+                  {isSubmittingProposal ? 'Saving proposal follow-up...' : 'Save proposal follow-up'}
                 </button>
               </form>
             </article>
@@ -2732,15 +2573,15 @@ function App() {
             <div className="proposal-directory-list">
               {filteredProposals.length === 0 ? (
                 <article className="dashboard-empty-state">
-                  <h3>No proposals tracked yet</h3>
-                  <p>Add a sent proposal to start a dedicated follow-up sequence.</p>
+                  <h3>No proposal follow-ups yet</h3>
+                  <p>Add a client whose proposal was already sent to start the follow-up sequence.</p>
                 </article>
               ) : (
                 filteredProposals.map((proposal) => {
                   const isBusy = busyProposalId === proposal.id
-                  const isClosed =
-                    proposal.status === 'approved' || proposal.status === 'declined'
                   const isComplete = proposal.sentFollowUps >= proposal.targetFollowUps
+                  const isFinished = proposal.status === 'finished'
+                  const isPaused = proposal.status === 'canceled'
                   const priority = getProposalPriority(proposal)
                   const attemptStatuses = createProposalAttemptStatuses(proposal)
 
@@ -2749,49 +2590,42 @@ function App() {
                       <div className="client-directory-head">
                         <div>
                           <div className="identity-row">
-                            <span className={`proposal-status proposal-status-${proposal.status}`}>
+                            <span className={`status-pill pill-${proposal.status}`}>
                               {getProposalStatusLabel(proposal.status)}
                             </span>
-                            {!isClosed ? (
+                            {proposal.status === 'active' ? (
                               <span className={`priority-badge priority-${priority.toLowerCase()}`}>
                                 {priority} priority
                               </span>
                             ) : null}
                           </div>
-                          <h3>{proposal.projectName}</h3>
+                          <h3>{proposal.clientName}</h3>
                           <p className="client-subtitle">
-                            {proposal.clientName} · {proposal.company || 'No company'} ·{' '}
-                            {proposal.email}
+                            {proposal.company || 'No company'} · {proposal.email}
                           </p>
                         </div>
 
                         <div className="next-window">
-                          <span>{isClosed ? 'Closed' : 'Next proposal email'}</span>
+                          <span>{isPaused ? 'Paused on' : 'Next proposal email'}</span>
                           <strong>
-                            {isClosed
-                              ? getProposalStatusLabel(proposal.status)
-                              : formatRelativeDue(proposal.nextFollowUpAt)}
+                            {formatRelativeDue(isPaused ? proposal.canceledAt : proposal.nextFollowUpAt)}
                           </strong>
-                          <small>
-                            {isClosed
-                              ? formatDateTime(proposal.approvedAt || proposal.declinedAt)
-                              : formatDateTime(proposal.nextFollowUpAt)}
-                          </small>
+                          <small>{formatDateTime(isPaused ? proposal.canceledAt : proposal.nextFollowUpAt)}</small>
                         </div>
                       </div>
 
                       <div className="followup-detail-grid">
                         <div>
-                          <span>Proposal value</span>
-                          <strong>{formatCurrency(proposal.proposalValue)}</strong>
-                        </div>
-                        <div>
-                          <span>Sent date</span>
-                          <strong>{formatDateTime(proposal.sentAt)}</strong>
+                          <span>Current status</span>
+                          <strong>{getProposalStatusLabel(proposal.status)}</strong>
                         </div>
                         <div>
                           <span>Last follow-up</span>
                           <strong>{formatDateTime(proposal.lastFollowUpAt)}</strong>
+                        </div>
+                        <div>
+                          <span>Next follow-up</span>
+                          <strong>{formatDateTime(proposal.nextFollowUpAt)}</strong>
                         </div>
                       </div>
 
@@ -2810,54 +2644,54 @@ function App() {
                       <p className="followup-summary">{proposal.notes || getProposalStageLabel(proposal)}</p>
 
                       <div className="followup-action-row">
-                        <button
-                          className="primary-button"
-                          disabled={isBusy || isClosed || isComplete}
-                          onClick={() => void handleSendProposal(proposal.id)}
-                          type="button"
-                        >
-                          {isBusy
-                            ? gmailConnection?.connected
-                              ? 'Sending...'
-                              : 'Opening...'
-                            : gmailConnection?.connected
-                              ? 'Send Proposal Email'
-                              : 'Open Proposal Draft'}
-                        </button>
-                        <button
-                          className="secondary-button"
-                          disabled={isBusy || proposal.status === 'approved'}
-                          onClick={() => void handleUpdateProposalStatus(proposal, 'approved')}
-                          type="button"
-                        >
-                          Mark Approved
-                        </button>
-                        <button
-                          className="ghost-button"
-                          disabled={isBusy || proposal.status === 'declined'}
-                          onClick={() => void handleUpdateProposalStatus(proposal, 'declined')}
-                          type="button"
-                        >
-                          Mark Declined
-                        </button>
-                        {isClosed ? (
+                        {proposal.status === 'active' ? (
+                          <>
+                            <button
+                              className="primary-button"
+                              disabled={isBusy || isComplete}
+                              onClick={() => void handleSendProposal(proposal.id)}
+                              type="button"
+                            >
+                              {isBusy
+                                ? gmailConnection?.connected
+                                  ? 'Sending...'
+                                  : 'Opening...'
+                                : gmailConnection?.connected
+                                  ? 'Send proposal email'
+                                  : 'Open proposal draft'}
+                            </button>
+                            <button
+                              className="ghost-button"
+                              disabled={isBusy}
+                              onClick={() => void handleUpdateProposalStatus(proposal, 'canceled')}
+                              type="button"
+                            >
+                              Pause proposal
+                            </button>
+                          </>
+                        ) : null}
+
+                        {isPaused ? (
                           <button
                             className="secondary-button"
                             disabled={isBusy}
-                            onClick={() => void handleUpdateProposalStatus(proposal, 'pending')}
+                            onClick={() => void handleUpdateProposalStatus(proposal, 'active')}
                             type="button"
                           >
-                            Reopen Pending
+                            {isBusy ? 'Rescheduling...' : 'Resume proposal'}
                           </button>
                         ) : null}
-                        <button
-                          className="danger-button"
-                          disabled={isBusy}
-                          onClick={() => void handleDeleteProposal(proposal)}
-                          type="button"
-                        >
-                          Delete
-                        </button>
+
+                        {isFinished ? (
+                          <button
+                            className="danger-button"
+                            disabled={isBusy}
+                            onClick={() => void handleDeleteProposal(proposal)}
+                            type="button"
+                          >
+                            {isBusy ? 'Deleting...' : 'Delete proposal'}
+                          </button>
+                        ) : null}
                       </div>
                     </article>
                   )

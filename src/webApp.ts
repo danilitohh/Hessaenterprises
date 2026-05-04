@@ -320,16 +320,19 @@ function normalizeClient(rawClient: unknown): ClientRecord {
 }
 
 function normalizeProposalStatus(value: unknown): ProposalRecord['status'] {
-  if (value === 'approved' || value === 'declined' || value === 'pending') {
+  if (value === 'active' || value === 'finished' || value === 'canceled') {
     return value
   }
 
-  return 'sent'
-}
+  if (value === 'approved') {
+    return 'finished'
+  }
 
-function normalizeProposalValue(value: unknown) {
-  const numericValue = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(numericValue) && numericValue >= 0 ? numericValue : 0
+  if (value === 'declined') {
+    return 'canceled'
+  }
+
+  return 'active'
 }
 
 function normalizeProposal(rawProposal: unknown): ProposalRecord {
@@ -352,8 +355,10 @@ function normalizeProposal(rawProposal: unknown): ProposalRecord {
   const followUpScheduleTimes = Array.from({ length: targetFollowUps }, (_, index) =>
     normalizeScheduleTime(scheduleSource[index], DEFAULT_SCHEDULE_TIMES[index]),
   )
-  const status = normalizeProposalStatus('status' in normalized ? normalized.status : 'sent')
-  const isClosed = status === 'approved' || status === 'declined'
+  let status = normalizeProposalStatus('status' in normalized ? normalized.status : 'active')
+  if (sentFollowUps >= targetFollowUps && status !== 'canceled') {
+    status = 'finished'
+  }
   const now = new Date().toISOString()
 
   return {
@@ -368,19 +373,8 @@ function normalizeProposal(rawProposal: unknown): ProposalRecord {
     company:
       ('company' in normalized && typeof normalized.company === 'string' && normalized.company) ||
       '',
-    projectName:
-      ('projectName' in normalized &&
-        typeof normalized.projectName === 'string' &&
-        normalized.projectName) ||
-      '',
-    proposalValue: normalizeProposalValue(
-      'proposalValue' in normalized ? normalized.proposalValue : 0,
-    ),
     notes: ('notes' in normalized && typeof normalized.notes === 'string' && normalized.notes) || '',
     status,
-    sentAt:
-      ('sentAt' in normalized && typeof normalized.sentAt === 'string' && normalized.sentAt) ||
-      now,
     createdAt:
       ('createdAt' in normalized &&
         typeof normalized.createdAt === 'string' &&
@@ -391,16 +385,16 @@ function normalizeProposal(rawProposal: unknown): ProposalRecord {
         typeof normalized.updatedAt === 'string' &&
         normalized.updatedAt) ||
       now,
-    approvedAt:
-      ('approvedAt' in normalized && typeof normalized.approvedAt === 'string'
-        ? normalized.approvedAt
+    canceledAt:
+      ('canceledAt' in normalized && typeof normalized.canceledAt === 'string'
+        ? normalized.canceledAt
         : null) || null,
-    declinedAt:
-      ('declinedAt' in normalized && typeof normalized.declinedAt === 'string'
-        ? normalized.declinedAt
+    finishedAt:
+      ('finishedAt' in normalized && typeof normalized.finishedAt === 'string'
+        ? normalized.finishedAt
         : null) || null,
     nextFollowUpAt:
-      !isClosed &&
+      status === 'active' &&
       sentFollowUps < targetFollowUps &&
       'nextFollowUpAt' in normalized &&
       typeof normalized.nextFollowUpAt === 'string'
@@ -618,13 +612,6 @@ function sortClients(clients: ClientRecord[]) {
 }
 
 function sortProposals(proposals: ProposalRecord[]) {
-  const statusPriority = {
-    sent: 0,
-    pending: 1,
-    approved: 2,
-    declined: 3,
-  } as const
-
   return [...proposals].sort((left, right) => {
     const leftStatus = statusPriority[left.status] ?? 99
     const rightStatus = statusPriority[right.status] ?? 99
@@ -633,7 +620,7 @@ function sortProposals(proposals: ProposalRecord[]) {
       return leftStatus - rightStatus
     }
 
-    if (left.nextFollowUpAt || right.nextFollowUpAt) {
+    if (left.status === 'active' && right.status === 'active') {
       const nextDifference = compareIsoDates(left.nextFollowUpAt, right.nextFollowUpAt)
 
       if (nextDifference !== 0) {
@@ -831,25 +818,14 @@ function buildProposalEmailPayload(
   followUpNumber: number,
 ) {
   const fromName = settings.sender.fromName || 'Hessa Enterprises'
-  const projectName = proposal.projectName || 'your proposal'
-  const proposalValue =
-    proposal.proposalValue > 0
-      ? new Intl.NumberFormat('en-US', {
-          currency: 'USD',
-          maximumFractionDigits: 0,
-          style: 'currency',
-        }).format(proposal.proposalValue)
-      : ''
-  const subject = `Following up on ${projectName}`
-  const valueLine = proposalValue ? `The proposal value is ${proposalValue}.` : ''
+  const subject = `Following up on the proposal we sent`
   const body = [
     `Hi ${proposal.clientName},`,
     '',
-    `I wanted to follow up on the proposal we sent for ${projectName}.`,
-    ...(valueLine ? [valueLine] : []),
-    'Do you have any questions, or is there anything you need from us to keep this moving forward?',
+    'I wanted to follow up on the proposal we sent.',
+    'Do you have any questions, or would you like to move forward with the next step?',
     '',
-    'If it is helpful, reply with the best next step and we will take it from there.',
+    'If it is helpful, reply here and we will take it from there.',
     '',
     'Best,',
     fromName,
@@ -862,7 +838,6 @@ function buildProposalEmailPayload(
         : subject,
     body,
     preview: body.split('\n').find((line) => line.trim())?.trim() ?? '',
-    value: proposalValue,
   }
 }
 
@@ -1056,7 +1031,7 @@ function selectProposalsForProcessing(
 
   return sortProposals(
     proposals.filter((proposal) => {
-      if (proposal.status === 'approved' || proposal.status === 'declined') {
+      if (proposal.status !== 'active') {
         return false
       }
 
@@ -1152,7 +1127,6 @@ async function advanceProposalWithDraft(
   proposal.lastFollowUpAt = preparedAt
   proposal.lastError = null
   proposal.updatedAt = preparedAt
-  proposal.status = proposal.status === 'sent' ? 'pending' : proposal.status
   proposal.history.unshift({
     id: createId(),
     contactNumber: followUpNumber,
@@ -1165,6 +1139,8 @@ async function advanceProposalWithDraft(
   })
 
   if (proposal.sentFollowUps >= proposal.targetFollowUps) {
+    proposal.status = 'finished'
+    proposal.finishedAt = preparedAt
     proposal.nextFollowUpAt = null
   } else {
     proposal.nextFollowUpAt = getNextProposalScheduledAt(
@@ -1452,14 +1428,8 @@ export const webApp = {
     const clientName = proposalInput.clientName.trim()
     const email = proposalInput.email.trim().toLowerCase()
     const company = proposalInput.company.trim()
-    const projectName = proposalInput.projectName.trim()
     const notes = proposalInput.notes.trim()
-    const proposalValue = Math.max(0, Number(proposalInput.proposalValue) || 0)
     const targetFollowUps = clampTargetContacts(proposalInput.targetFollowUps)
-    const sentAt = new Date(proposalInput.sentAt)
-    const nextFollowUpAt = new Date(proposalInput.nextFollowUpAt)
-    const status = normalizeProposalStatus(proposalInput.status)
-    const isClosed = status === 'approved' || status === 'declined'
 
     if (!clientName) {
       throw new Error('Client name is required for the proposal.')
@@ -1467,18 +1437,6 @@ export const webApp = {
 
     if (!isValidEmail(email)) {
       throw new Error('Please enter a valid proposal contact email.')
-    }
-
-    if (!projectName) {
-      throw new Error('Project name is required for the proposal.')
-    }
-
-    if (Number.isNaN(sentAt.getTime())) {
-      throw new Error('Proposal sent date is invalid.')
-    }
-
-    if (!isClosed && Number.isNaN(nextFollowUpAt.getTime())) {
-      throw new Error('Next proposal follow-up date is invalid.')
     }
 
     const followUpScheduleTimes = Array.from({ length: targetFollowUps }, (_, index) =>
@@ -1495,16 +1453,13 @@ export const webApp = {
       clientName,
       email,
       company,
-      projectName,
-      proposalValue,
       notes,
-      status,
-      sentAt: sentAt.toISOString(),
+      status: 'active',
       createdAt,
       updatedAt: createdAt,
-      approvedAt: status === 'approved' ? createdAt : null,
-      declinedAt: status === 'declined' ? createdAt : null,
-      nextFollowUpAt: isClosed ? null : nextFollowUpAt.toISOString(),
+      canceledAt: null,
+      finishedAt: null,
+      nextFollowUpAt: null,
       lastFollowUpAt: null,
       lastError: null,
       sentFollowUps: 0,
@@ -1513,15 +1468,14 @@ export const webApp = {
       history: [],
     }
 
-    if (!proposal.nextFollowUpAt && !isClosed) {
-      proposal.nextFollowUpAt = getNextProposalScheduledAt(
-        proposal,
-        createdAt,
-        1,
-        database.settings.automation.intervalDays,
-        'initial',
-      )
-    }
+    const firstFollowUpAt = getNextProposalScheduledAt(
+      proposal,
+      createdAt,
+      1,
+      database.settings.automation.intervalDays,
+      'initial',
+    )
+    proposal.nextFollowUpAt = firstFollowUpAt
 
     database.proposals.unshift(proposal)
     persistDatabase(session.user.id, database)
@@ -1539,11 +1493,7 @@ export const webApp = {
       ...getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user),
       result: {
         failed: 0,
-        message: isClosed
-          ? 'Proposal added to the pipeline.'
-          : `Proposal added. Next follow-up scheduled for ${
-              proposal.nextFollowUpAt ? toDateLabel(proposal.nextFollowUpAt) : 'the next available time'
-            }.`,
+        message: `Proposal follow-up added. First email scheduled for ${toDateLabel(firstFollowUpAt)}.`,
         processed: 0,
         sent: 0,
       },
@@ -1668,8 +1618,8 @@ export const webApp = {
       throw new Error('The selected proposal could not be found.')
     }
 
-    if (proposal.status === 'approved' || proposal.status === 'declined') {
-      throw new Error('Closed proposals cannot send follow-up emails.')
+    if (proposal.status !== 'active') {
+      throw new Error('Only active proposal follow-ups can open drafts.')
     }
 
     if (proposal.sentFollowUps >= proposal.targetFollowUps) {
@@ -1747,31 +1697,28 @@ export const webApp = {
 
     const normalizedStatus = normalizeProposalStatus(nextStatus)
     const now = new Date().toISOString()
-    proposal.status = normalizedStatus
-    proposal.updatedAt = now
-    proposal.lastError = null
 
-    if (normalizedStatus === 'approved') {
-      proposal.approvedAt = now
-      proposal.declinedAt = null
-      proposal.nextFollowUpAt = null
-    } else if (normalizedStatus === 'declined') {
-      proposal.declinedAt = now
-      proposal.approvedAt = null
-      proposal.nextFollowUpAt = null
-    } else {
-      proposal.approvedAt = null
-      proposal.declinedAt = null
-
-      if (proposal.sentFollowUps < proposal.targetFollowUps && !proposal.nextFollowUpAt) {
-        proposal.nextFollowUpAt = getNextProposalScheduledAt(
-          proposal,
-          now,
-          proposal.sentFollowUps + 1,
-          database.settings.automation.intervalDays,
-          'resume',
-        )
+    if (normalizedStatus === 'active') {
+      if (proposal.status === 'finished' || proposal.sentFollowUps >= proposal.targetFollowUps) {
+        throw new Error('This proposal follow-up sequence is complete and can now be removed.')
       }
+
+      proposal.status = 'active'
+      proposal.canceledAt = null
+      proposal.lastError = null
+      proposal.updatedAt = now
+      proposal.nextFollowUpAt = getNextProposalScheduledAt(
+        proposal,
+        now,
+        proposal.sentFollowUps + 1,
+        database.settings.automation.intervalDays,
+        'resume',
+      )
+    } else {
+      proposal.status = 'canceled'
+      proposal.canceledAt = now
+      proposal.updatedAt = now
+      proposal.nextFollowUpAt = null
     }
 
     const persisted = persistDatabase(session.user.id, database)
@@ -1780,7 +1727,10 @@ export const webApp = {
       ...getAppStateFromDatabase(persisted, session.user),
       result: {
         failed: 0,
-        message: `Proposal marked ${normalizedStatus}.`,
+        message:
+          normalizedStatus === 'active'
+            ? 'Proposal follow-up resumed and rescheduled.'
+            : 'Proposal follow-up paused successfully.',
         processed: 0,
         sent: 0,
       },
