@@ -75,7 +75,9 @@ create table if not exists public.platform_super_admin_emails (
 );
 
 insert into public.platform_super_admin_emails (email)
-values ('pa@hessaenterprises.com')
+values
+  ('kevin.hessam@gmail.com'),
+  ('danilitohhh@gmail.com')
 on conflict (email) do nothing;
 
 create table if not exists public.accounts (
@@ -88,6 +90,10 @@ create table if not exists public.accounts (
   trial_ends_at timestamptz,
   subscription_started_at timestamptz,
   subscription_ends_at timestamptz,
+  billing_provider text,
+  billing_customer_id text,
+  billing_subscription_id text,
+  billing_metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

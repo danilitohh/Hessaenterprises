@@ -67,6 +67,8 @@ La app ya tiene una capa progresiva para operar como SaaS multi-tenant:
 - La UI separa datos por cuenta en el workspace actual.
 - El panel maestro esta disponible en `/admin` y `/super-admin` para usuarios `super_admin`.
 - Los planes y estados de suscripcion ya existen como estructura: `free`, `basic`, `pro`, `business`; `free`, `trial`, `active`, `past_due`, `cancelled`, `suspended`.
+- Los super admins maestros configurados son `kevin.hessam@gmail.com` y `danilitohhh@gmail.com`.
+- La base queda preparada para pagos futuros con campos de proveedor, cliente y suscripcion de billing.
 - No hay pagos activos todavia.
 
 Para seguridad multi-tenant real en Supabase, aplica la migracion:

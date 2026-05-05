@@ -32,7 +32,7 @@ const LEGACY_STORAGE_KEY = 'hessa-followup-web'
 const PLATFORM_STORAGE_KEY = 'hessa-followup-web:platform'
 const ACCOUNT_STORAGE_PREFIX = 'hessa-followup-web:account:'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
-const DEFAULT_SUPER_ADMIN_EMAILS = ['pa@hessaenterprises.com']
+const DEFAULT_SUPER_ADMIN_EMAILS = ['kevin.hessam@gmail.com', 'danilitohhh@gmail.com']
 const DEFAULT_TRY_COUNT = 4
 const MAX_SEQUENCE_TRIES = 100
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
@@ -664,18 +664,7 @@ function getUserDisplayName(user: User) {
 }
 
 function getConfiguredSuperAdminEmails() {
-  const configuredEmails =
-    typeof import.meta.env.VITE_SUPER_ADMIN_EMAILS === 'string'
-      ? import.meta.env.VITE_SUPER_ADMIN_EMAILS
-      : ''
-
-  return [
-    ...DEFAULT_SUPER_ADMIN_EMAILS,
-    ...configuredEmails
-      .split(',')
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean),
-  ]
+  return DEFAULT_SUPER_ADMIN_EMAILS
 }
 
 function isSuperAdminEmail(email: string) {
@@ -944,6 +933,11 @@ function ensurePlatformMembership(user: User) {
 
   if (shouldBeSuperAdmin && membership.role !== 'super_admin') {
     membership.role = 'super_admin'
+    didChange = true
+  }
+
+  if (!shouldBeSuperAdmin && membership.role === 'super_admin') {
+    membership.role = 'owner'
     didChange = true
   }
 
@@ -2151,7 +2145,14 @@ export const webApp = {
 
   async getAdminState() {
     await requireSuperAdminContext()
-    return (await getAdminPlatformStateFromSupabase()) ?? getAdminPlatformState()
+    const localState = getAdminPlatformState()
+    const supabaseState = await getAdminPlatformStateFromSupabase()
+
+    if (supabaseState && (supabaseState.accounts.length > 0 || localState.accounts.length === 0)) {
+      return supabaseState
+    }
+
+    return localState
   },
 
   async updateAccountPlan(accountId: string, plan: AccountPlan) {
