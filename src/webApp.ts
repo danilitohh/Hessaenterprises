@@ -1045,15 +1045,58 @@ function ensurePlatformMembership(user: User) {
   }
 }
 
-async function requireSession() {
+function getUnknownErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isTransientFetchFailure(error: unknown) {
+  const message = getUnknownErrorMessage(error).toLowerCase()
+
+  return (
+    message === 'failed to fetch' ||
+    message.includes('failed to fetch') ||
+    message.includes('networkerror') ||
+    message.includes('load failed')
+  )
+}
+
+async function getSessionUserFromCache() {
   const supabase = getSupabaseClient()
-  const { data, error } = await supabase.auth.getUser()
+  const { data, error } = await supabase.auth.getSession()
 
   if (error) {
     throw new Error(error.message)
   }
 
-  const user = data.user
+  return data.session?.user ?? null
+}
+
+async function getVerifiedUserWithCacheFallback() {
+  const supabase = getSupabaseClient()
+
+  try {
+    const { data, error } = await supabase.auth.getUser()
+
+    if (error) {
+      if (isTransientFetchFailure(error)) {
+        return getSessionUserFromCache()
+      }
+
+      throw new Error(error.message)
+    }
+
+    return data.user
+  } catch (error) {
+    if (!isTransientFetchFailure(error)) {
+      throw error
+    }
+
+    return getSessionUserFromCache()
+  }
+}
+
+async function requireSession() {
+  const user = await getVerifiedUserWithCacheFallback()
   const context = user ? ensurePlatformMembership(user) : null
   const session = user ? { user: toPublicUser(user, context?.membership) } : null
 
