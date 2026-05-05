@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
   const supabase = createAdminClient()
   const { data: storedState, error: stateError } = await supabase
     .from('gmail_oauth_states')
-    .select('state,user_id,code_verifier,redirect_to,expires_at')
+    .select('state,user_id,account_id,code_verifier,redirect_to,expires_at')
     .eq('state', state)
     .maybeSingle()
 
@@ -57,6 +57,7 @@ Deno.serve(async (req) => {
 
     const { error: upsertError } = await supabase.from('gmail_connections').upsert(
       {
+        account_id: storedState.account_id,
         connected_at: new Date().toISOString(),
         email: profile.email,
         encrypted_refresh_token: encryptedRefreshToken,

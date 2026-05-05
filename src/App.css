@@ -1351,6 +1351,126 @@
   gap: 12px;
 }
 
+.admin-route-pill {
+  align-content: center;
+  min-height: 54px;
+  padding: 10px 18px;
+}
+
+.admin-route-pill strong {
+  color: var(--dashboard-ink);
+}
+
+.admin-account-list {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-account-card {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--dashboard-border);
+  border-radius: 24px;
+  background: linear-gradient(180deg, #fff, #fbf8f3);
+}
+
+.admin-account-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.75fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.admin-account-head h3 {
+  margin-top: 10px;
+  color: var(--dashboard-ink);
+}
+
+.admin-account-head p {
+  margin-top: 4px;
+  color: var(--dashboard-muted);
+  overflow-wrap: anywhere;
+}
+
+.admin-account-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-account-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-account-metrics div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--dashboard-border);
+  border-radius: 18px;
+  background: #fff;
+}
+
+.admin-account-metrics span {
+  color: var(--dashboard-muted);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.admin-account-metrics strong {
+  color: var(--dashboard-ink);
+}
+
+.admin-user-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-user-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--dashboard-border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.admin-user-row > span {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--dashboard-ink);
+  color: #fff;
+  font-weight: 900;
+}
+
+.admin-user-row div {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-user-row strong {
+  color: var(--dashboard-ink);
+}
+
+.admin-user-row small,
+.admin-user-row em {
+  color: var(--dashboard-muted);
+}
+
+.admin-user-row em {
+  font-style: normal;
+  font-weight: 800;
+}
+
 .dashboard-kpi-card {
   display: grid;
   gap: 10px;
@@ -2496,7 +2616,7 @@
   }
 
   .sidebar-nav {
-    grid-template-columns: repeat(6, minmax(92px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
     overflow-x: auto;
   }
 
@@ -2514,8 +2634,13 @@
   .dashboard-primary-grid,
   .dashboard-operations-grid,
   .client-workspace-grid,
-  .proposal-workspace-grid {
+  .proposal-workspace-grid,
+  .admin-account-head {
     grid-template-columns: 1fr;
+  }
+
+  .admin-account-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2585,7 +2710,7 @@
 
   .sidebar-nav {
     display: grid;
-    grid-template-columns: repeat(6, minmax(76px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
     gap: 6px;
     overflow-x: auto;
   }
@@ -2650,7 +2775,9 @@
   .proposal-workspace-grid,
   .followup-detail-grid,
   .pipeline-stage-list,
-  .template-picker-card {
+  .template-picker-card,
+  .admin-account-controls,
+  .admin-account-metrics {
     grid-template-columns: 1fr;
   }
 

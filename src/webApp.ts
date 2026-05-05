@@ -4,6 +4,11 @@ import type {
   AppState,
   AuthSession,
   AuthUser,
+  AccountPlan,
+  AccountRecord,
+  AccountStatus,
+  AccountUserRecord,
+  AdminPlatformState,
   ClientInput,
   ClientRecord,
   EmailTemplate,
@@ -17,12 +22,17 @@ import type {
   RuntimeInfo,
   SettingsInput,
   SettingsState,
+  SubscriptionStatus,
+  UserRole,
 } from './types'
 import type { User } from '@supabase/supabase-js'
 import { getSupabaseClient, supabaseFunctionBaseUrl } from './supabaseClient'
 
 const LEGACY_STORAGE_KEY = 'hessa-followup-web'
+const PLATFORM_STORAGE_KEY = 'hessa-followup-web:platform'
+const ACCOUNT_STORAGE_PREFIX = 'hessa-followup-web:account:'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
+const DEFAULT_SUPER_ADMIN_EMAILS = ['pa@hessaenterprises.com']
 const DEFAULT_TRY_COUNT = 4
 const MAX_SEQUENCE_TRIES = 100
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
@@ -33,10 +43,17 @@ const statusPriority = {
 } as const
 
 type Database = {
+  accountId: string
   version: number
   settings: SettingsState
   clients: ClientRecord[]
   proposals: ProposalRecord[]
+}
+
+type PlatformRegistry = {
+  accounts: AccountRecord[]
+  users: AccountUserRecord[]
+  version: number
 }
 
 type EmailDeliveryOptions = {
@@ -57,8 +74,9 @@ type GmailSendFunctionResponse = {
   sent: boolean
 }
 
-function createDefaultTemplate(contactNumber: number): EmailTemplate {
+function createDefaultTemplate(contactNumber: number, accountId = ''): EmailTemplate {
   return {
+    accountId,
     id: `contact-${contactNumber}`,
     title: `Touchpoint ${contactNumber}`,
     subject: `Follow-up ${contactNumber} of {{maxContacts}} for {{name}}`,
@@ -76,12 +94,13 @@ function createDefaultTemplate(contactNumber: number): EmailTemplate {
   }
 }
 
-function createDefaultTemplates(count = DEFAULT_TRY_COUNT) {
-  return Array.from({ length: count }, (_, index) => createDefaultTemplate(index + 1))
+function createDefaultTemplates(count = DEFAULT_TRY_COUNT, accountId = '') {
+  return Array.from({ length: count }, (_, index) => createDefaultTemplate(index + 1, accountId))
 }
 
-function createDefaultProposalTemplate(contactNumber: number): EmailTemplate {
+function createDefaultProposalTemplate(contactNumber: number, accountId = ''): EmailTemplate {
   return {
+    accountId,
     id: `proposal-contact-${contactNumber}`,
     title: `Proposal touchpoint ${contactNumber}`,
     subject:
@@ -102,8 +121,10 @@ function createDefaultProposalTemplate(contactNumber: number): EmailTemplate {
   }
 }
 
-function createDefaultProposalTemplates(count = DEFAULT_TRY_COUNT) {
-  return Array.from({ length: count }, (_, index) => createDefaultProposalTemplate(index + 1))
+function createDefaultProposalTemplates(count = DEFAULT_TRY_COUNT, accountId = '') {
+  return Array.from({ length: count }, (_, index) =>
+    createDefaultProposalTemplate(index + 1, accountId),
+  )
 }
 
 function createLegacyDefaultTemplate(contactNumber: number) {
@@ -143,8 +164,10 @@ function createLegacyDefaultProposalTemplates(count = DEFAULT_TRY_COUNT) {
 }
 
 const defaultDatabase: Database = Object.freeze({
+  accountId: '',
   version: 1,
   settings: {
+    accountId: '',
     sender: {
       fromEmail: '',
       fromName: 'Hessa Enterprises',
@@ -168,8 +191,22 @@ function createId() {
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function cloneDefaultDatabase() {
-  return JSON.parse(JSON.stringify(defaultDatabase)) as Database
+function withDatabaseAccountId(database: Database, accountId: string) {
+  database.accountId = accountId
+  database.settings.accountId = accountId
+  database.settings.templates = database.settings.templates.map((template) => ({
+    ...template,
+    accountId,
+  }))
+  database.settings.proposalTemplates = database.settings.proposalTemplates.map((template) => ({
+    ...template,
+    accountId,
+  }))
+  return database
+}
+
+function cloneDefaultDatabase(accountId = '') {
+  return withDatabaseAccountId(JSON.parse(JSON.stringify(defaultDatabase)) as Database, accountId)
 }
 
 function isValidEmail(email: string) {
@@ -208,6 +245,7 @@ function normalizeTemplates(
   legacyDefaults = createLegacyDefaultTemplates(),
   createFallbackTemplate = createDefaultTemplate,
   createLegacyFallbackTemplate = createLegacyDefaultTemplate,
+  accountId = '',
 ) {
   const incomingTemplates = Array.isArray(rawTemplates) ? rawTemplates : []
   const desiredCount = Math.max(defaults.length, incomingTemplates.length)
@@ -245,6 +283,7 @@ function normalizeTemplates(
         : template.body
 
     return {
+      accountId,
       id: template.id,
       title: template.title,
       subject,
@@ -256,21 +295,27 @@ function normalizeTemplates(
 function ensureTemplateCount(
   templates: EmailTemplate[],
   targetCount: number,
-  createTemplate: (contactNumber: number) => EmailTemplate,
+  createTemplate: (contactNumber: number, accountId?: string) => EmailTemplate,
+  accountId = '',
 ) {
+  const normalizedTemplates = templates.map((template) => ({
+    ...template,
+    accountId,
+  }))
+
   if (templates.length >= targetCount) {
-    return templates
+    return normalizedTemplates
   }
 
   return [
-    ...templates,
+    ...normalizedTemplates,
     ...Array.from({ length: targetCount - templates.length }, (_, index) =>
-      createTemplate(templates.length + index + 1),
+      createTemplate(templates.length + index + 1, accountId),
     ),
   ]
 }
 
-function normalizeHistory(rawHistory: unknown) {
+function normalizeHistory(rawHistory: unknown, accountId: string) {
   if (!Array.isArray(rawHistory)) {
     return []
   }
@@ -280,6 +325,7 @@ function normalizeHistory(rawHistory: unknown) {
       historyItem && typeof historyItem === 'object' ? historyItem : Object.create(null)
 
     return {
+      accountId,
       id:
         'id' in normalized && typeof normalized.id === 'string' && normalized.id
           ? normalized.id
@@ -316,7 +362,7 @@ function normalizeHistory(rawHistory: unknown) {
   })
 }
 
-function normalizeClient(rawClient: unknown): ClientRecord {
+function normalizeClient(rawClient: unknown, accountId: string): ClientRecord {
   const normalized =
     rawClient && typeof rawClient === 'object' ? rawClient : Object.create(null)
   const targetContacts =
@@ -346,6 +392,7 @@ function normalizeClient(rawClient: unknown): ClientRecord {
   }
 
   return {
+    accountId,
     id: ('id' in normalized && typeof normalized.id === 'string' && normalized.id) || createId(),
     name: ('name' in normalized && typeof normalized.name === 'string' && normalized.name) || '',
     email:
@@ -390,7 +437,7 @@ function normalizeClient(rawClient: unknown): ClientRecord {
     sentContacts,
     targetContacts,
     contactScheduleTimes,
-    history: normalizeHistory('history' in normalized ? normalized.history : []),
+    history: normalizeHistory('history' in normalized ? normalized.history : [], accountId),
   }
 }
 
@@ -410,7 +457,7 @@ function normalizeProposalStatus(value: unknown): ProposalRecord['status'] {
   return 'active'
 }
 
-function normalizeProposal(rawProposal: unknown): ProposalRecord {
+function normalizeProposal(rawProposal: unknown, accountId: string): ProposalRecord {
   const normalized =
     rawProposal && typeof rawProposal === 'object' ? rawProposal : Object.create(null)
   const targetFollowUps =
@@ -437,6 +484,7 @@ function normalizeProposal(rawProposal: unknown): ProposalRecord {
   const now = new Date().toISOString()
 
   return {
+    accountId,
     id: ('id' in normalized && typeof normalized.id === 'string' && normalized.id) || createId(),
     clientName:
       ('clientName' in normalized &&
@@ -486,12 +534,12 @@ function normalizeProposal(rawProposal: unknown): ProposalRecord {
     sentFollowUps,
     targetFollowUps,
     followUpScheduleTimes,
-    history: normalizeHistory('history' in normalized ? normalized.history : []),
+    history: normalizeHistory('history' in normalized ? normalized.history : [], accountId),
   }
 }
 
-function normalizeDatabase(rawData: unknown): Database {
-  const database = cloneDefaultDatabase()
+function normalizeDatabase(rawData: unknown, accountId = ''): Database {
+  const database = cloneDefaultDatabase(accountId)
   const normalized = rawData && typeof rawData === 'object' ? rawData : Object.create(null)
   const rawSettings =
     'settings' in normalized && normalized.settings && typeof normalized.settings === 'object'
@@ -514,6 +562,7 @@ function normalizeDatabase(rawData: unknown): Database {
       : 1
 
   database.settings = {
+    accountId,
     sender: {
       fromEmail:
         ('fromEmail' in rawSender && typeof rawSender.fromEmail === 'string'
@@ -524,13 +573,21 @@ function normalizeDatabase(rawData: unknown): Database {
           ? rawSender.fromName
           : database.settings.sender.fromName) || 'Hessa Enterprises',
     },
-    templates: normalizeTemplates('templates' in rawSettings ? rawSettings.templates : []),
+    templates: normalizeTemplates(
+      'templates' in rawSettings ? rawSettings.templates : [],
+      createDefaultTemplates(DEFAULT_TRY_COUNT, accountId),
+      createLegacyDefaultTemplates(),
+      createDefaultTemplate,
+      createLegacyDefaultTemplate,
+      accountId,
+    ),
     proposalTemplates: normalizeTemplates(
       'proposalTemplates' in rawSettings ? rawSettings.proposalTemplates : [],
-      createDefaultProposalTemplates(),
+      createDefaultProposalTemplates(DEFAULT_TRY_COUNT, accountId),
       createLegacyDefaultProposalTemplates(),
       createDefaultProposalTemplate,
       createLegacyDefaultProposalTemplate,
+      accountId,
     ),
     automation: {
       intervalDays:
@@ -549,12 +606,12 @@ function normalizeDatabase(rawData: unknown): Database {
 
   database.clients =
     'clients' in normalized && Array.isArray(normalized.clients)
-      ? normalized.clients.map(normalizeClient)
+      ? normalized.clients.map((client: unknown) => normalizeClient(client, accountId))
       : []
 
   database.proposals =
     'proposals' in normalized && Array.isArray(normalized.proposals)
-      ? normalized.proposals.map(normalizeProposal)
+      ? normalized.proposals.map((proposal: unknown) => normalizeProposal(proposal, accountId))
       : []
 
   const requiredAppointmentTemplates = Math.max(
@@ -570,14 +627,16 @@ function normalizeDatabase(rawData: unknown): Database {
     database.settings.templates,
     requiredAppointmentTemplates,
     createDefaultTemplate,
+    accountId,
   )
   database.settings.proposalTemplates = ensureTemplateCount(
     database.settings.proposalTemplates,
     requiredProposalTemplates,
     createDefaultProposalTemplate,
+    accountId,
   )
 
-  return database
+  return withDatabaseAccountId(database, accountId)
 }
 
 function getRedirectUrl(mode?: 'reset-password') {
@@ -604,49 +663,301 @@ function getUserDisplayName(user: User) {
   return name.trim() || user.email?.split('@')[0] || 'Hessa user'
 }
 
-function toPublicUser(user: User): AuthUser {
+function getConfiguredSuperAdminEmails() {
+  const configuredEmails =
+    typeof import.meta.env.VITE_SUPER_ADMIN_EMAILS === 'string'
+      ? import.meta.env.VITE_SUPER_ADMIN_EMAILS
+      : ''
+
+  return [
+    ...DEFAULT_SUPER_ADMIN_EMAILS,
+    ...configuredEmails
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  ]
+}
+
+function isSuperAdminEmail(email: string) {
+  return getConfiguredSuperAdminEmails().includes(email.trim().toLowerCase())
+}
+
+function toPublicUser(
+  user: User,
+  membership?: Pick<AccountUserRecord, 'accountId' | 'role'>,
+): AuthUser {
   return {
+    accountId: membership?.accountId ?? '',
     id: user.id,
     name: getUserDisplayName(user),
     email: user.email ?? '',
     createdAt: user.created_at,
+    role: membership?.role ?? (isSuperAdminEmail(user.email ?? '') ? 'super_admin' : 'owner'),
   }
 }
 
-function toAuthSession(user: User | null | undefined): AuthSession | null {
-  return user ? { user: toPublicUser(user) } : null
+function toTenantSession(user: User | null | undefined): AuthSession | null {
+  if (!user) {
+    return null
+  }
+
+  const { membership } = ensurePlatformMembership(user)
+  return { user: toPublicUser(user, membership) }
+}
+
+function createAccountId(userId: string) {
+  return `account-${userId}`
+}
+
+function createAccountName(user: AuthUser | User) {
+  const name = 'name' in user ? user.name : getUserDisplayName(user)
+  return `${name || 'Hessa'} Workspace`
+}
+
+function createDefaultAccount(user: AuthUser | User): AccountRecord {
+  const userId = user.id
+  const now = new Date().toISOString()
+
+  return {
+    id: createAccountId(userId),
+    name: createAccountName(user),
+    ownerUserId: userId,
+    plan: 'free',
+    subscriptionStatus: 'free',
+    status: 'active',
+    trialEndsAt: null,
+    subscriptionStartedAt: null,
+    subscriptionEndsAt: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+function normalizePlan(value: unknown): AccountPlan {
+  return value === 'basic' || value === 'pro' || value === 'business' ? value : 'free'
+}
+
+function normalizeSubscriptionStatus(value: unknown): SubscriptionStatus {
+  return value === 'trial' ||
+    value === 'active' ||
+    value === 'past_due' ||
+    value === 'cancelled' ||
+    value === 'suspended'
+    ? value
+    : 'free'
+}
+
+function normalizeAccountStatus(value: unknown): AccountStatus {
+  return value === 'suspended' ? 'suspended' : 'active'
+}
+
+function normalizeRole(value: unknown, fallback: UserRole = 'owner'): UserRole {
+  return value === 'super_admin' ||
+    value === 'owner' ||
+    value === 'admin' ||
+    value === 'staff' ||
+    value === 'viewer'
+    ? value
+    : fallback
+}
+
+function normalizeAccount(rawAccount: unknown): AccountRecord {
+  const normalized =
+    rawAccount && typeof rawAccount === 'object' ? rawAccount : Object.create(null)
+  const now = new Date().toISOString()
+  const id =
+    'id' in normalized && typeof normalized.id === 'string' && normalized.id
+      ? normalized.id
+      : createId()
+
+  return {
+    id,
+    name:
+      ('name' in normalized && typeof normalized.name === 'string' && normalized.name) ||
+      'Hessa Workspace',
+    ownerUserId:
+      ('ownerUserId' in normalized &&
+        typeof normalized.ownerUserId === 'string' &&
+        normalized.ownerUserId) ||
+      '',
+    plan: normalizePlan('plan' in normalized ? normalized.plan : 'free'),
+    subscriptionStatus: normalizeSubscriptionStatus(
+      'subscriptionStatus' in normalized ? normalized.subscriptionStatus : 'free',
+    ),
+    status: normalizeAccountStatus('status' in normalized ? normalized.status : 'active'),
+    trialEndsAt:
+      ('trialEndsAt' in normalized && typeof normalized.trialEndsAt === 'string'
+        ? normalized.trialEndsAt
+        : null) || null,
+    subscriptionStartedAt:
+      ('subscriptionStartedAt' in normalized &&
+      typeof normalized.subscriptionStartedAt === 'string'
+        ? normalized.subscriptionStartedAt
+        : null) || null,
+    subscriptionEndsAt:
+      ('subscriptionEndsAt' in normalized && typeof normalized.subscriptionEndsAt === 'string'
+        ? normalized.subscriptionEndsAt
+        : null) || null,
+    createdAt:
+      ('createdAt' in normalized && typeof normalized.createdAt === 'string'
+        ? normalized.createdAt
+        : null) || now,
+    updatedAt:
+      ('updatedAt' in normalized && typeof normalized.updatedAt === 'string'
+        ? normalized.updatedAt
+        : null) || now,
+  }
+}
+
+function normalizeAccountUser(rawUser: unknown): AccountUserRecord {
+  const normalized = rawUser && typeof rawUser === 'object' ? rawUser : Object.create(null)
+
+  return {
+    accountId:
+      ('accountId' in normalized && typeof normalized.accountId === 'string' && normalized.accountId) ||
+      '',
+    email:
+      ('email' in normalized && typeof normalized.email === 'string' && normalized.email) || '',
+    joinedAt:
+      ('joinedAt' in normalized && typeof normalized.joinedAt === 'string' && normalized.joinedAt) ||
+      new Date().toISOString(),
+    name:
+      ('name' in normalized && typeof normalized.name === 'string' && normalized.name) || '',
+    role: normalizeRole('role' in normalized ? normalized.role : 'owner'),
+    userId:
+      ('userId' in normalized && typeof normalized.userId === 'string' && normalized.userId) ||
+      createId(),
+  }
+}
+
+function normalizePlatformRegistry(rawPlatform: unknown): PlatformRegistry {
+  const normalized =
+    rawPlatform && typeof rawPlatform === 'object' ? rawPlatform : Object.create(null)
+
+  return {
+    version:
+      'version' in normalized && Number.isInteger(normalized.version) && normalized.version > 0
+        ? normalized.version
+        : 1,
+    accounts:
+      'accounts' in normalized && Array.isArray(normalized.accounts)
+        ? normalized.accounts.map(normalizeAccount)
+        : [],
+    users:
+      'users' in normalized && Array.isArray(normalized.users)
+        ? normalized.users.map(normalizeAccountUser)
+        : [],
+  }
+}
+
+function loadPlatformRegistry() {
+  try {
+    const stored = window.localStorage.getItem(PLATFORM_STORAGE_KEY)
+    return normalizePlatformRegistry(stored ? JSON.parse(stored) : null)
+  } catch {
+    return normalizePlatformRegistry(null)
+  }
+}
+
+function savePlatformRegistry(platform: PlatformRegistry) {
+  const normalized = normalizePlatformRegistry(platform)
+  window.localStorage.setItem(PLATFORM_STORAGE_KEY, JSON.stringify(normalized))
+  return normalized
 }
 
 function getWorkspaceStorageKey(userId: string) {
   return `${WORKSPACE_STORAGE_PREFIX}${userId}`
 }
 
-function loadDatabaseByKey(storageKey: string) {
+function getAccountStorageKey(accountId: string) {
+  return `${ACCOUNT_STORAGE_PREFIX}${accountId}`
+}
+
+function loadDatabaseByKey(storageKey: string, accountId: string) {
   try {
     const stored = window.localStorage.getItem(storageKey)
 
     if (!stored) {
-      return cloneDefaultDatabase()
+      return cloneDefaultDatabase(accountId)
     }
 
-    return normalizeDatabase(JSON.parse(stored))
+    return normalizeDatabase(JSON.parse(stored), accountId)
   } catch {
-    return cloneDefaultDatabase()
+    return cloneDefaultDatabase(accountId)
   }
 }
 
-function saveDatabaseByKey(storageKey: string, database: Database) {
-  const normalized = normalizeDatabase(database)
+function saveDatabaseByKey(storageKey: string, database: Database, accountId: string) {
+  const normalized = normalizeDatabase(database, accountId)
   window.localStorage.setItem(storageKey, JSON.stringify(normalized))
   return normalized
 }
 
-function loadDatabaseForUser(userId: string) {
-  return loadDatabaseByKey(getWorkspaceStorageKey(userId))
+function loadDatabaseForAccount(accountId: string) {
+  return loadDatabaseByKey(getAccountStorageKey(accountId), accountId)
 }
 
-function saveDatabaseForUser(userId: string, database: Database) {
-  return saveDatabaseByKey(getWorkspaceStorageKey(userId), database)
+function saveDatabaseForAccount(accountId: string, database: Database) {
+  return saveDatabaseByKey(getAccountStorageKey(accountId), database, accountId)
+}
+
+function ensurePlatformMembership(user: User) {
+  const platform = loadPlatformRegistry()
+  const email = user.email?.trim().toLowerCase() ?? ''
+  const shouldBeSuperAdmin = isSuperAdminEmail(email)
+  let membership = platform.users.find((item) => item.userId === user.id)
+  let account: AccountRecord | undefined
+
+  if (membership) {
+    account = platform.accounts.find((item) => item.id === membership?.accountId)
+  }
+  let didChange = false
+
+  if (!membership) {
+    const role: UserRole = shouldBeSuperAdmin ? 'super_admin' : 'owner'
+    account = createDefaultAccount(user)
+    membership = {
+      accountId: account.id,
+      email,
+      joinedAt: new Date().toISOString(),
+      name: getUserDisplayName(user),
+      role,
+      userId: user.id,
+    }
+    platform.accounts.push(account)
+    platform.users.push(membership)
+    didChange = true
+  }
+
+  if (!account) {
+    account = createDefaultAccount(user)
+    account.id = membership.accountId || account.id
+    platform.accounts.push(account)
+    didChange = true
+  }
+
+  if (membership.email !== email || membership.name !== getUserDisplayName(user)) {
+    membership.email = email
+    membership.name = getUserDisplayName(user)
+    didChange = true
+  }
+
+  if (shouldBeSuperAdmin && membership.role !== 'super_admin') {
+    membership.role = 'super_admin'
+    didChange = true
+  }
+
+  if (didChange) {
+    savePlatformRegistry(platform)
+  }
+
+  migrateLegacyWorkspaceToAccount(user.id, membership.accountId)
+
+  return {
+    account,
+    membership,
+    platform: didChange ? loadPlatformRegistry() : platform,
+  }
 }
 
 async function requireSession() {
@@ -657,27 +968,70 @@ async function requireSession() {
     throw new Error(error.message)
   }
 
-  const session = toAuthSession(data.user)
+  const user = data.user
+  const context = user ? ensurePlatformMembership(user) : null
+  const session = user ? { user: toPublicUser(user, context?.membership) } : null
 
   if (!session) {
     throw new Error('Please sign in to continue.')
   }
 
   return {
+    account: context?.account,
+    membership: context?.membership,
     session,
   }
 }
 
-function migrateLegacyWorkspaceToUser(userId: string) {
-  const legacyStored = window.localStorage.getItem(LEGACY_STORAGE_KEY)
-  const targetKey = getWorkspaceStorageKey(userId)
+async function requireWorkspaceContext() {
+  const context = await requireSession()
 
-  if (!legacyStored || window.localStorage.getItem(targetKey)) {
+  if (!context.account || !context.membership) {
+    throw new Error('Workspace account could not be resolved.')
+  }
+
+  if (context.account.status === 'suspended' || context.account.subscriptionStatus === 'suspended') {
+    throw new Error('This account is suspended. Contact the platform owner to reactivate it.')
+  }
+
+  return {
+    account: context.account,
+    membership: context.membership,
+    session: context.session,
+  }
+}
+
+async function requireSuperAdminContext() {
+  const context = await requireSession()
+
+  if (!context.account || !context.membership || context.membership.role !== 'super_admin') {
+    throw new Error('Only super admins can access the master admin panel.')
+  }
+
+  return {
+    account: context.account,
+    membership: context.membership,
+    session: context.session,
+  }
+}
+
+function migrateLegacyWorkspaceToAccount(userId: string, accountId: string) {
+  const legacyStored = window.localStorage.getItem(LEGACY_STORAGE_KEY)
+  const userStored = window.localStorage.getItem(getWorkspaceStorageKey(userId))
+  const targetKey = getAccountStorageKey(accountId)
+
+  if (window.localStorage.getItem(targetKey)) {
     return
   }
 
   try {
-    const legacyDatabase = normalizeDatabase(JSON.parse(legacyStored))
+    const source = userStored || legacyStored
+
+    if (!source) {
+      return
+    }
+
+    const legacyDatabase = normalizeDatabase(JSON.parse(source), accountId)
     window.localStorage.setItem(targetKey, JSON.stringify(legacyDatabase))
     window.localStorage.removeItem(LEGACY_STORAGE_KEY)
   } catch {
@@ -807,14 +1161,14 @@ function scheduleFollowUp(referenceIso: string, timeValue: string, intervalDays:
 function getScheduleTime(client: ClientRecord, contactNumber: number) {
   return normalizeScheduleTime(
     client.contactScheduleTimes[contactNumber - 1],
-    DEFAULT_SCHEDULE_TIMES[contactNumber - 1] ?? '09:00',
+    getDefaultScheduleTime(contactNumber - 1),
   )
 }
 
 function getProposalScheduleTime(proposal: ProposalRecord, followUpNumber: number) {
   return normalizeScheduleTime(
     proposal.followUpScheduleTimes[followUpNumber - 1],
-    DEFAULT_SCHEDULE_TIMES[followUpNumber - 1] ?? '09:00',
+    getDefaultScheduleTime(followUpNumber - 1),
   )
 }
 
@@ -1071,8 +1425,13 @@ function getRuntimeInfo(): RuntimeInfo {
   }
 }
 
-function getAppStateFromDatabase(database: Database, currentUser: AuthUser): AppState {
+function getAppStateFromDatabase(
+  database: Database,
+  currentUser: AuthUser,
+  account: AccountRecord,
+): AppState {
   return {
+    account,
     currentUser,
     runtimeInfo: getRuntimeInfo(),
     settings: database.settings,
@@ -1082,28 +1441,42 @@ function getAppStateFromDatabase(database: Database, currentUser: AuthUser): App
   }
 }
 
-function persistDatabase(userId: string, database: Database) {
+function persistDatabase(accountId: string, database: Database) {
   database.clients = sortClients(database.clients)
   database.proposals = sortProposals(database.proposals)
-  return saveDatabaseForUser(userId, database)
+  return saveDatabaseForAccount(accountId, database)
 }
 
-function mergeSettings(currentSettings: SettingsState, incomingSettings: SettingsInput): SettingsState {
-  const normalizedAppointmentTemplates = normalizeTemplates(incomingSettings.templates)
+function mergeSettings(
+  currentSettings: SettingsState,
+  incomingSettings: SettingsInput,
+  accountId: string,
+): SettingsState {
+  const normalizedAppointmentTemplates = normalizeTemplates(
+    incomingSettings.templates,
+    createDefaultTemplates(DEFAULT_TRY_COUNT, accountId),
+    createLegacyDefaultTemplates(),
+    createDefaultTemplate,
+    createLegacyDefaultTemplate,
+    accountId,
+  )
   const normalizedProposalTemplates = normalizeTemplates(
     incomingSettings.proposalTemplates,
-    createDefaultProposalTemplates(),
+    createDefaultProposalTemplates(DEFAULT_TRY_COUNT, accountId),
     createLegacyDefaultProposalTemplates(),
     createDefaultProposalTemplate,
     createLegacyDefaultProposalTemplate,
+    accountId,
   )
 
   return {
+    accountId,
     sender: {
       fromEmail: incomingSettings.sender.fromEmail.trim(),
       fromName: incomingSettings.sender.fromName.trim() || 'Hessa Enterprises',
     },
     templates: normalizedAppointmentTemplates.map((template, index) => ({
+      accountId,
       id: template.id,
       title: template.title,
       subject:
@@ -1116,6 +1489,7 @@ function mergeSettings(currentSettings: SettingsState, incomingSettings: Setting
         template.body,
     })),
     proposalTemplates: normalizedProposalTemplates.map((template, index) => ({
+      accountId,
       id: template.id,
       title: template.title,
       subject:
@@ -1221,6 +1595,7 @@ async function advanceClientWithDraft(
   client.lastError = null
   client.updatedAt = preparedAt
   client.history.unshift({
+    accountId: client.accountId,
     id: createId(),
     contactNumber,
     status: 'prepared',
@@ -1273,6 +1648,7 @@ async function advanceProposalWithDraft(
   proposal.lastError = null
   proposal.updatedAt = preparedAt
   proposal.history.unshift({
+    accountId: proposal.accountId,
     id: createId(),
     contactNumber: followUpNumber,
     status: 'prepared',
@@ -1302,12 +1678,13 @@ async function advanceProposalWithDraft(
 function buildOperationResponse(
   database: Database,
   currentUser: AuthUser,
+  account: AccountRecord,
   message: string,
   processed = 1,
   sent = 1,
 ): AppOperationResponse {
   return {
-    ...getAppStateFromDatabase(database, currentUser),
+    ...getAppStateFromDatabase(database, currentUser, account),
     result: {
       failed: 0,
       message,
@@ -1315,6 +1692,308 @@ function buildOperationResponse(
       sent,
     },
   }
+}
+
+function getAccountMetrics(accountId: string) {
+  const database = loadDatabaseForAccount(accountId)
+  const emailCount =
+    database.clients.reduce((total, client) => total + client.sentContacts, 0) +
+    database.proposals.reduce((total, proposal) => total + proposal.sentFollowUps, 0)
+
+  return {
+    appointmentCount: database.clients.length,
+    emailCount,
+    proposalCount: database.proposals.length,
+  }
+}
+
+function getAdminPlatformState(): AdminPlatformState {
+  const platform = loadPlatformRegistry()
+  const accounts = platform.accounts.map((account) => {
+    const users = platform.users.filter((user) => user.accountId === account.id)
+    const metrics = getAccountMetrics(account.id)
+
+    return {
+      ...account,
+      ...metrics,
+      activeUsers: users.length,
+      users,
+    }
+  })
+  const metrics = accounts.reduce(
+    (summary, account) => {
+      summary.totalAccounts += 1
+      summary.totalUsers += account.users.length
+      summary.appointmentCount += account.appointmentCount
+      summary.proposalCount += account.proposalCount
+      summary.emailCount += account.emailCount
+
+      if (account.status === 'suspended' || account.subscriptionStatus === 'suspended') {
+        summary.suspendedAccounts += 1
+      } else {
+        summary.activeAccounts += 1
+      }
+
+      return summary
+    },
+    {
+      activeAccounts: 0,
+      appointmentCount: 0,
+      emailCount: 0,
+      proposalCount: 0,
+      suspendedAccounts: 0,
+      totalAccounts: 0,
+      totalUsers: 0,
+    },
+  )
+
+  return {
+    accounts,
+    metrics,
+  }
+}
+
+function isSupabaseSchemaUnavailable(error: unknown) {
+  const normalized = error && typeof error === 'object' ? error : Object.create(null)
+  const code = 'code' in normalized && typeof normalized.code === 'string' ? normalized.code : ''
+  const message =
+    'message' in normalized && typeof normalized.message === 'string' ? normalized.message : ''
+
+  return (
+    code === '42P01' ||
+    code === '42703' ||
+    code === 'PGRST205' ||
+    message.includes('Could not find the table') ||
+    message.includes('schema cache')
+  )
+}
+
+function mapSupabaseAccount(rawAccount: unknown): AccountRecord {
+  const normalized =
+    rawAccount && typeof rawAccount === 'object' ? rawAccount : Object.create(null)
+
+  return normalizeAccount({
+    id:
+      'id' in normalized && typeof normalized.id === 'string' && normalized.id
+        ? normalized.id
+        : '',
+    name:
+      'name' in normalized && typeof normalized.name === 'string' && normalized.name
+        ? normalized.name
+        : '',
+    ownerUserId:
+      'owner_user_id' in normalized && typeof normalized.owner_user_id === 'string'
+        ? normalized.owner_user_id
+        : '',
+    plan: 'plan' in normalized ? normalized.plan : 'free',
+    subscriptionStatus:
+      'subscription_status' in normalized ? normalized.subscription_status : 'free',
+    status: 'status' in normalized ? normalized.status : 'active',
+    trialEndsAt:
+      'trial_ends_at' in normalized && typeof normalized.trial_ends_at === 'string'
+        ? normalized.trial_ends_at
+        : null,
+    subscriptionStartedAt:
+      'subscription_started_at' in normalized &&
+      typeof normalized.subscription_started_at === 'string'
+        ? normalized.subscription_started_at
+        : null,
+    subscriptionEndsAt:
+      'subscription_ends_at' in normalized &&
+      typeof normalized.subscription_ends_at === 'string'
+        ? normalized.subscription_ends_at
+        : null,
+    createdAt:
+      'created_at' in normalized && typeof normalized.created_at === 'string'
+        ? normalized.created_at
+        : null,
+    updatedAt:
+      'updated_at' in normalized && typeof normalized.updated_at === 'string'
+        ? normalized.updated_at
+        : null,
+  })
+}
+
+function mapSupabaseAccountUser(rawUser: unknown): AccountUserRecord {
+  const normalized = rawUser && typeof rawUser === 'object' ? rawUser : Object.create(null)
+
+  return normalizeAccountUser({
+    accountId:
+      'account_id' in normalized && typeof normalized.account_id === 'string'
+        ? normalized.account_id
+        : '',
+    email:
+      'email' in normalized && typeof normalized.email === 'string' ? normalized.email : '',
+    joinedAt:
+      'joined_at' in normalized && typeof normalized.joined_at === 'string'
+        ? normalized.joined_at
+        : '',
+    name:
+      'full_name' in normalized && typeof normalized.full_name === 'string'
+        ? normalized.full_name
+        : '',
+    role: 'role' in normalized ? normalized.role : 'viewer',
+    userId:
+      'user_id' in normalized && typeof normalized.user_id === 'string'
+        ? normalized.user_id
+        : '',
+  })
+}
+
+function countRowsByAccount(rows: Array<{ account_id?: unknown }>) {
+  return rows.reduce((counts, row) => {
+    if (typeof row.account_id === 'string') {
+      counts.set(row.account_id, (counts.get(row.account_id) ?? 0) + 1)
+    }
+
+    return counts
+  }, new Map<string, number>())
+}
+
+async function selectAccountIdRows(tableName: string) {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase.from(tableName).select('account_id')
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return []
+    }
+
+    throw new Error(error.message)
+  }
+
+  return (data ?? []) as Array<{ account_id?: unknown }>
+}
+
+async function getAdminPlatformStateFromSupabase() {
+  const supabase = getSupabaseClient()
+  const { data: accountRows, error: accountsError } = await supabase
+    .from('accounts')
+    .select('*')
+    .order('created_at', { ascending: false })
+
+  if (accountsError) {
+    if (isSupabaseSchemaUnavailable(accountsError)) {
+      return null
+    }
+
+    throw new Error(accountsError.message)
+  }
+
+  const { data: userRows, error: usersError } = await supabase
+    .from('account_users')
+    .select('*')
+
+  if (usersError) {
+    if (isSupabaseSchemaUnavailable(usersError)) {
+      return null
+    }
+
+    throw new Error(usersError.message)
+  }
+
+  const [
+    appointmentRows,
+    proposalRows,
+    emailEventRows,
+    gmailSendLogRows,
+  ] = await Promise.all([
+    selectAccountIdRows('appointments'),
+    selectAccountIdRows('proposals'),
+    selectAccountIdRows('email_events'),
+    selectAccountIdRows('gmail_send_logs'),
+  ])
+  const appointmentCounts = countRowsByAccount(appointmentRows)
+  const proposalCounts = countRowsByAccount(proposalRows)
+  const emailEventCounts = countRowsByAccount([...emailEventRows, ...gmailSendLogRows])
+  const users = (userRows ?? []).map(mapSupabaseAccountUser)
+  const accounts = (accountRows ?? []).map((rawAccount) => {
+    const account = mapSupabaseAccount(rawAccount)
+    const accountUsers = users.filter((user) => user.accountId === account.id)
+
+    return {
+      ...account,
+      activeUsers: accountUsers.length,
+      appointmentCount: appointmentCounts.get(account.id) ?? 0,
+      emailCount: emailEventCounts.get(account.id) ?? 0,
+      proposalCount: proposalCounts.get(account.id) ?? 0,
+      users: accountUsers,
+    }
+  })
+
+  const metrics = accounts.reduce(
+    (summary, account) => {
+      summary.totalAccounts += 1
+      summary.totalUsers += account.users.length
+      summary.appointmentCount += account.appointmentCount
+      summary.proposalCount += account.proposalCount
+      summary.emailCount += account.emailCount
+
+      if (account.status === 'suspended' || account.subscriptionStatus === 'suspended') {
+        summary.suspendedAccounts += 1
+      } else {
+        summary.activeAccounts += 1
+      }
+
+      return summary
+    },
+    {
+      activeAccounts: 0,
+      appointmentCount: 0,
+      emailCount: 0,
+      proposalCount: 0,
+      suspendedAccounts: 0,
+      totalAccounts: 0,
+      totalUsers: 0,
+    },
+  )
+
+  return {
+    accounts,
+    metrics,
+  }
+}
+
+async function updateSupabaseAccount(
+  accountId: string,
+  patch: Partial<{
+    plan: AccountPlan
+    status: AccountStatus
+    subscription_status: SubscriptionStatus
+    updated_at: string
+  }>,
+) {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase
+    .from('accounts')
+    .update(patch)
+    .eq('id', accountId)
+    .select('id')
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return false
+    }
+
+    throw new Error(error.message)
+  }
+
+  return Array.isArray(data) && data.length > 0
+}
+
+function updatePlatformAccount(
+  accountId: string,
+  updater: (account: AccountRecord) => AccountRecord,
+) {
+  const platform = loadPlatformRegistry()
+  const accountIndex = platform.accounts.findIndex((account) => account.id === accountId)
+
+  if (accountIndex === -1) {
+    throw new Error('Account could not be found.')
+  }
+
+  platform.accounts[accountIndex] = updater(platform.accounts[accountIndex])
+  savePlatformRegistry(platform)
 }
 
 export const webApp = {
@@ -1326,7 +2005,7 @@ export const webApp = {
       throw new Error(error.message)
     }
 
-    return toAuthSession(data.session?.user)
+    return toTenantSession(data.session?.user)
   },
 
   async register(registerInput: RegisterInput): Promise<AuthActionResult> {
@@ -1363,11 +2042,7 @@ export const webApp = {
       throw new Error(error.message)
     }
 
-    const nextSession = toAuthSession(data.session?.user)
-
-    if (nextSession) {
-      migrateLegacyWorkspaceToUser(nextSession.user.id)
-    }
+    const nextSession = toTenantSession(data.session?.user)
 
     return {
       message: nextSession
@@ -1399,11 +2074,7 @@ export const webApp = {
       throw new Error(error.message)
     }
 
-    const nextSession = toAuthSession(data.user)
-
-    if (nextSession) {
-      migrateLegacyWorkspaceToUser(nextSession.user.id)
-    }
+    const nextSession = toTenantSession(data.user)
 
     return {
       message: 'Signed in successfully.',
@@ -1460,7 +2131,7 @@ export const webApp = {
 
     return {
       message: 'Password updated successfully.',
-      session: toAuthSession(data.user),
+      session: toTenantSession(data.user),
     }
   },
 
@@ -1474,18 +2145,91 @@ export const webApp = {
   },
 
   async getAppState() {
-    const { session } = await requireSession()
-    return getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user)
+    const { account, session } = await requireWorkspaceContext()
+    return getAppStateFromDatabase(loadDatabaseForAccount(account.id), session.user, account)
+  },
+
+  async getAdminState() {
+    await requireSuperAdminContext()
+    return (await getAdminPlatformStateFromSupabase()) ?? getAdminPlatformState()
+  },
+
+  async updateAccountPlan(accountId: string, plan: AccountPlan) {
+    await requireSuperAdminContext()
+    const normalizedPlan = normalizePlan(plan)
+    const planPatch: Parameters<typeof updateSupabaseAccount>[1] = {
+      plan: normalizedPlan,
+      updated_at: new Date().toISOString(),
+    }
+
+    if (normalizedPlan === 'free') {
+      planPatch.subscription_status = 'free'
+    }
+
+    const updatedInSupabase = await updateSupabaseAccount(accountId, planPatch)
+
+    if (updatedInSupabase) {
+      return (await getAdminPlatformStateFromSupabase()) ?? getAdminPlatformState()
+    }
+
+    updatePlatformAccount(accountId, (account) => ({
+      ...account,
+      plan: normalizedPlan,
+      subscriptionStatus:
+        normalizedPlan === 'free' && account.subscriptionStatus !== 'suspended'
+          ? 'free'
+          : account.subscriptionStatus,
+      updatedAt: new Date().toISOString(),
+    }))
+
+    return getAdminPlatformState()
+  },
+
+  async updateAccountStatus(accountId: string, status: AccountStatus) {
+    await requireSuperAdminContext()
+    const normalizedStatus = normalizeAccountStatus(status)
+    const currentAdminState = await getAdminPlatformStateFromSupabase()
+    const currentAccount = currentAdminState?.accounts.find((account) => account.id === accountId)
+    const updatedInSupabase = await updateSupabaseAccount(accountId, {
+      status: normalizedStatus,
+      subscription_status:
+        normalizedStatus === 'suspended'
+          ? 'suspended'
+          : currentAccount?.plan === 'free'
+            ? 'free'
+            : 'active',
+      updated_at: new Date().toISOString(),
+    })
+
+    if (updatedInSupabase) {
+      return (await getAdminPlatformStateFromSupabase()) ?? getAdminPlatformState()
+    }
+
+    updatePlatformAccount(accountId, (account) => ({
+      ...account,
+      status: normalizedStatus,
+      subscriptionStatus:
+        normalizedStatus === 'suspended'
+          ? 'suspended'
+          : account.subscriptionStatus === 'suspended'
+            ? account.plan === 'free'
+              ? 'free'
+              : 'active'
+            : account.subscriptionStatus,
+      updatedAt: new Date().toISOString(),
+    }))
+
+    return getAdminPlatformState()
   },
 
   async saveSettings(incomingSettings: SettingsInput) {
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
-    database.settings = mergeSettings(database.settings, incomingSettings)
-    const persisted = persistDatabase(session.user.id, database)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
+    database.settings = mergeSettings(database.settings, incomingSettings, account.id)
+    const persisted = persistDatabase(account.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted, session.user),
+      ...getAppStateFromDatabase(persisted, session.user, account),
       result: {
         failed: 0,
         message: 'Workspace settings saved successfully.',
@@ -1496,7 +2240,7 @@ export const webApp = {
   },
 
   async createClient(clientInput: ClientInput, options: EmailDeliveryOptions = {}) {
-    const { session } = await requireSession()
+    const { account, session } = await requireWorkspaceContext()
     const name = clientInput.name.trim()
     const email = clientInput.email.trim().toLowerCase()
     const company = clientInput.company.trim()
@@ -1515,15 +2259,17 @@ export const webApp = {
       normalizeScheduleTime(clientInput.contactScheduleTimes[index], getDefaultScheduleTime(index)),
     )
 
-    const database = loadDatabaseForUser(session.user.id)
+    const database = loadDatabaseForAccount(account.id)
     database.settings.templates = ensureTemplateCount(
       database.settings.templates,
       targetContacts,
       createDefaultTemplate,
+      account.id,
     )
     const createdAt = new Date().toISOString()
     const client: ClientRecord = {
       id: createId(),
+      accountId: account.id,
       name,
       email,
       company,
@@ -1551,7 +2297,7 @@ export const webApp = {
     )
 
     database.clients.unshift(client)
-    persistDatabase(session.user.id, database)
+    persistDatabase(account.id, database)
 
     const shouldAutoOpen =
       database.settings.automation.autoOpenDraftOnCreate &&
@@ -1563,7 +2309,7 @@ export const webApp = {
     }
 
     return {
-      ...getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user),
+      ...getAppStateFromDatabase(loadDatabaseForAccount(account.id), session.user, account),
       result: {
         failed: 0,
         message: `Client added. First draft scheduled for ${toDateLabel(client.nextContactAt)}.`,
@@ -1574,7 +2320,7 @@ export const webApp = {
   },
 
   async createProposal(proposalInput: ProposalInput, options: EmailDeliveryOptions = {}) {
-    const { session } = await requireSession()
+    const { account, session } = await requireWorkspaceContext()
     const clientName = proposalInput.clientName.trim()
     const email = proposalInput.email.trim().toLowerCase()
     const company = proposalInput.company.trim()
@@ -1596,15 +2342,17 @@ export const webApp = {
       ),
     )
 
-    const database = loadDatabaseForUser(session.user.id)
+    const database = loadDatabaseForAccount(account.id)
     database.settings.proposalTemplates = ensureTemplateCount(
       database.settings.proposalTemplates,
       targetFollowUps,
       createDefaultProposalTemplate,
+      account.id,
     )
     const createdAt = new Date().toISOString()
     const proposal: ProposalRecord = {
       id: createId(),
+      accountId: account.id,
       clientName,
       email,
       company,
@@ -1633,7 +2381,7 @@ export const webApp = {
     proposal.nextFollowUpAt = firstFollowUpAt
 
     database.proposals.unshift(proposal)
-    persistDatabase(session.user.id, database)
+    persistDatabase(account.id, database)
 
     const shouldAutoOpen =
       database.settings.automation.autoOpenDraftOnCreate &&
@@ -1645,7 +2393,7 @@ export const webApp = {
     }
 
     return {
-      ...getAppStateFromDatabase(loadDatabaseForUser(session.user.id), session.user),
+      ...getAppStateFromDatabase(loadDatabaseForAccount(account.id), session.user, account),
       result: {
         failed: 0,
         message: `Proposal follow-up added. First email scheduled for ${toDateLabel(firstFollowUpAt)}.`,
@@ -1656,13 +2404,13 @@ export const webApp = {
   },
 
   async processDueFollowUps(options: EmailDeliveryOptions = {}) {
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const candidates = selectClientsForProcessing(database.clients)
 
     if (candidates.length === 0) {
       return {
-        ...getAppStateFromDatabase(database, session.user),
+        ...getAppStateFromDatabase(database, session.user, account),
         result: {
           failed: 0,
           message: 'There are no scheduled follow-ups ready to open.',
@@ -1679,7 +2427,7 @@ export const webApp = {
     }
 
     const delivery = await advanceClientWithDraft(database, client, options)
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
     const remainingDue = selectClientsForProcessing(persisted.clients).length
     const suffix =
       remainingDue > 0
@@ -1689,18 +2437,19 @@ export const webApp = {
     return buildOperationResponse(
       persisted,
       session.user,
+      account,
       `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} the next follow-up for ${client.name}.${suffix}`,
     )
   },
 
   async processDueProposalFollowUps(options: EmailDeliveryOptions = {}) {
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const candidates = selectProposalsForProcessing(database.proposals)
 
     if (candidates.length === 0) {
       return {
-        ...getAppStateFromDatabase(database, session.user),
+        ...getAppStateFromDatabase(database, session.user, account),
         result: {
           failed: 0,
           message: 'There are no proposal follow-ups ready to send.',
@@ -1717,7 +2466,7 @@ export const webApp = {
     }
 
     const delivery = await advanceProposalWithDraft(database, proposal, options)
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
     const remainingDue = selectProposalsForProcessing(persisted.proposals).length
     const suffix =
       remainingDue > 0 ? ` ${remainingDue} more proposal follow-ups are still due.` : ''
@@ -1725,6 +2474,7 @@ export const webApp = {
     return buildOperationResponse(
       persisted,
       session.user,
+      account,
       `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} the next proposal follow-up for ${proposal.clientName}.${suffix}`,
     )
   },
@@ -1734,8 +2484,8 @@ export const webApp = {
       throw new Error('A client must be selected before opening a draft.')
     }
 
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -1751,11 +2501,12 @@ export const webApp = {
     }
 
     const delivery = await advanceClientWithDraft(database, client, options)
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
 
     return buildOperationResponse(
       persisted,
       session.user,
+      account,
       `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} touchpoint ${client.sentContacts} for ${client.name}.`,
     )
   },
@@ -1765,8 +2516,8 @@ export const webApp = {
       throw new Error('A proposal must be selected before opening a draft.')
     }
 
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const proposal = database.proposals.find((item) => item.id === proposalId)
 
     if (!proposal) {
@@ -1782,18 +2533,19 @@ export const webApp = {
     }
 
     const delivery = await advanceProposalWithDraft(database, proposal, options)
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
 
     return buildOperationResponse(
       persisted,
       session.user,
+      account,
       `${delivery.method === 'gmail' ? 'Sent' : 'Opened'} proposal follow-up ${proposal.sentFollowUps} for ${proposal.clientName}.`,
     )
   },
 
   async updateClientStatus(clientId: string, nextStatus: ClientRecord['status']) {
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -1825,10 +2577,10 @@ export const webApp = {
       client.nextContactAt = null
     }
 
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted, session.user),
+      ...getAppStateFromDatabase(persisted, session.user, account),
       result: {
         failed: 0,
         message:
@@ -1842,8 +2594,8 @@ export const webApp = {
   },
 
   async updateProposalStatus(proposalId: string, nextStatus: ProposalRecord['status']) {
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const proposal = database.proposals.find((item) => item.id === proposalId)
 
     if (!proposal) {
@@ -1876,10 +2628,10 @@ export const webApp = {
       proposal.nextFollowUpAt = null
     }
 
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted, session.user),
+      ...getAppStateFromDatabase(persisted, session.user, account),
       result: {
         failed: 0,
         message:
@@ -1897,8 +2649,8 @@ export const webApp = {
       throw new Error('A client must be selected before deletion.')
     }
 
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const clientIndex = database.clients.findIndex((item) => item.id === clientId)
 
     if (clientIndex === -1) {
@@ -1906,10 +2658,10 @@ export const webApp = {
     }
 
     database.clients.splice(clientIndex, 1)
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted, session.user),
+      ...getAppStateFromDatabase(persisted, session.user, account),
       result: {
         failed: 0,
         message: 'Client deleted successfully.',
@@ -1924,8 +2676,8 @@ export const webApp = {
       throw new Error('A proposal must be selected before deletion.')
     }
 
-    const { session } = await requireSession()
-    const database = loadDatabaseForUser(session.user.id)
+    const { account, session } = await requireWorkspaceContext()
+    const database = loadDatabaseForAccount(account.id)
     const proposalIndex = database.proposals.findIndex((item) => item.id === proposalId)
 
     if (proposalIndex === -1) {
@@ -1933,10 +2685,10 @@ export const webApp = {
     }
 
     database.proposals.splice(proposalIndex, 1)
-    const persisted = persistDatabase(session.user.id, database)
+    const persisted = persistDatabase(account.id, database)
 
     return {
-      ...getAppStateFromDatabase(persisted, session.user),
+      ...getAppStateFromDatabase(persisted, session.user, account),
       result: {
         failed: 0,
         message: 'Proposal deleted successfully.',

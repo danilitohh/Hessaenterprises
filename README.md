@@ -5,7 +5,7 @@ Aplicacion web en `React + TypeScript` para gestionar clientes y llevar seguimie
 ## Que hace
 
 - Registra clientes con nombre, correo, empresa y notas.
-- Define hasta 4 contactos por cliente con hora especifica por intento.
+- Define la cantidad de intentos que cada usuario quiera usar por seguimiento.
 - Guarda clientes, reglas y plantillas en `localStorage` del navegador.
 - Abre cada correo como borrador en el cliente de correo predeterminado del usuario.
 - Reprograma automaticamente el siguiente contacto segun el intervalo configurado.
@@ -57,6 +57,25 @@ La app incluye una integracion para que cada usuario conecte Gmail y los follow-
 El flujo seguro usa OAuth + Supabase Edge Functions. Si Gmail no esta conectado, la app mantiene el comportamiento actual y abre el borrador con `mailto:`.
 
 Consulta `GMAIL_INTEGRATION.md` antes de desplegar o cambiar esta integracion.
+
+## SaaS readiness
+
+La app ya tiene una capa progresiva para operar como SaaS multi-tenant:
+
+- Roles preparados: `super_admin`, `owner`, `admin`, `staff`, `viewer`.
+- Cada sesion queda asociada a un `account_id`.
+- La UI separa datos por cuenta en el workspace actual.
+- El panel maestro esta disponible en `/admin` y `/super-admin` para usuarios `super_admin`.
+- Los planes y estados de suscripcion ya existen como estructura: `free`, `basic`, `pro`, `business`; `free`, `trial`, `active`, `past_due`, `cancelled`, `suspended`.
+- No hay pagos activos todavia.
+
+Para seguridad multi-tenant real en Supabase, aplica la migracion:
+
+```bash
+supabase db push
+```
+
+La migracion `supabase/migrations/202605050001_saas_multi_tenant.sql` crea `accounts`, `account_users`, campos de monetizacion futura, tablas base para appointments/proposals/follow-ups/templates, `account_id` en registros de Gmail y politicas RLS.
 
 ## Build
 

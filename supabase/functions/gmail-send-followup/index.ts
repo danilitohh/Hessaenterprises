@@ -1,7 +1,11 @@
 import { decryptToken } from '../_shared/crypto.ts'
 import { createRawEmailMessage, refreshGoogleAccessToken, sendGmailMessage } from '../_shared/google.ts'
 import { handleOptions, jsonResponse } from '../_shared/http.ts'
-import { createAdminClient, getAuthenticatedUser } from '../_shared/supabase.ts'
+import {
+  createAdminClient,
+  getAuthenticatedUser,
+  getUserPrimaryAccountId,
+} from '../_shared/supabase.ts'
 
 type SendRequest = {
   body?: string
@@ -44,6 +48,7 @@ Deno.serve(async (req) => {
 
   let supabase: ReturnType<typeof createAdminClient> | null = null
   let userId: string | null = null
+  let accountId: string | null = null
   let connectionId: string | null = null
   let payload: ReturnType<typeof assertSendRequest> | null = null
 
@@ -51,11 +56,12 @@ Deno.serve(async (req) => {
     supabase = createAdminClient()
     const user = await getAuthenticatedUser(req)
     userId = user.id
+    accountId = await getUserPrimaryAccountId(supabase, user.id)
     payload = assertSendRequest((await req.json()) as SendRequest)
 
     const { data: connection, error: connectionError } = await supabase
       .from('gmail_connections')
-      .select('id,email,encrypted_refresh_token')
+      .select('id,email,encrypted_refresh_token,account_id')
       .eq('user_id', user.id)
       .is('revoked_at', null)
       .maybeSingle()
@@ -83,8 +89,11 @@ Deno.serve(async (req) => {
       to: payload.to,
     })
     const sentMessage = await sendGmailMessage(token.access_token, raw)
+    const logAccountId =
+      typeof connection.account_id === 'string' ? connection.account_id : accountId
 
     await supabase.from('gmail_send_logs').insert({
+      account_id: logAccountId,
       client_name: payload.clientName,
       contact_number: payload.contactNumber,
       gmail_connection_id: connection.id,
@@ -104,6 +113,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     if (supabase && userId && payload) {
       await supabase.from('gmail_send_logs').insert({
+        account_id: accountId,
         client_name: payload.clientName,
         contact_number: payload.contactNumber,
         error: error instanceof Error ? error.message : 'Gmail send failed.',

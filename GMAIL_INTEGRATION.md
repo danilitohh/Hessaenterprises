@@ -55,6 +55,9 @@ Apply the database migration:
 supabase db push
 ```
 
+This also applies the SaaS multi-tenant migration when it has not been pushed yet, including
+`account_id` fields for Gmail connections and send logs.
+
 Set Edge Function secrets:
 
 ```bash

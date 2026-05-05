@@ -7,6 +7,9 @@ import perUserWorkspaceIcon from './assets/landing-icons/per-user-workspace.png?
 import proposalPipelineIcon from './assets/landing-icons/proposal-pipeline.png?url&no-inline'
 import logoWordmark from './assets/logo-wordmark.png'
 import type {
+  AccountPlan,
+  AccountStatus,
+  AdminPlatformState,
   AppOperationResponse,
   AppState,
   AuthSession,
@@ -71,7 +74,6 @@ type DashboardPriority = 'High' | 'Low' | 'Medium'
 type DashboardActivityItem = {
   description: string
   id: string
-  isMock: boolean
   timestamp: string | null
   title: string
   tone: 'danger' | 'info' | 'success' | 'warning'
@@ -134,6 +136,7 @@ function createAppointmentTemplate(index: number): EmailTemplate {
   const contactNumber = index + 1
 
   return {
+    accountId: '',
     id: `contact-${contactNumber}`,
     title: `Touchpoint ${contactNumber}`,
     subject: `Follow-up ${contactNumber} of {{maxContacts}} for {{name}}`,
@@ -155,6 +158,7 @@ function createProposalTemplate(index: number): EmailTemplate {
   const contactNumber = index + 1
 
   return {
+    accountId: '',
     id: `proposal-contact-${contactNumber}`,
     title: `Proposal touchpoint ${contactNumber}`,
     subject:
@@ -182,6 +186,7 @@ function ensureTemplateCount(
 ) {
   const desiredCount = normalizeTryCount(targetCount)
   const createTemplate = workflow === 'appointment' ? createAppointmentTemplate : createProposalTemplate
+  const accountId = templates[0]?.accountId ?? ''
 
   if (templates.length >= desiredCount) {
     return templates
@@ -190,7 +195,7 @@ function ensureTemplateCount(
   return [
     ...templates,
     ...Array.from({ length: desiredCount - templates.length }, (_, index) =>
-      createTemplate(templates.length + index),
+      ({ ...createTemplate(templates.length + index), accountId }),
     ),
   ]
 }
@@ -534,6 +539,9 @@ const dashboardNavItems: Array<{ href: DashboardPageId; label: string }> = [
   { href: 'settings', label: 'Settings' },
 ]
 
+const accountPlanOptions: AccountPlan[] = ['free', 'basic', 'pro', 'business']
+const accountStatusOptions: AccountStatus[] = ['active', 'suspended']
+
 const dashboardPageIds = new Set<DashboardPageId>(dashboardNavItems.map((item) => item.href))
 
 function getInitialDashboardPage(): DashboardPageId {
@@ -549,6 +557,10 @@ function getInitialDashboardPage(): DashboardPageId {
         ? 'tracking'
         : (rawHashPage as DashboardPageId)
   return dashboardPageIds.has(hashPage) ? hashPage : 'dashboard'
+}
+
+function isAdminPath(pathname = window.location.pathname) {
+  return pathname === '/admin' || pathname === '/super-admin'
 }
 
 function getDashboardPageForSection(sectionId: string): DashboardPageId {
@@ -631,42 +643,6 @@ function compareNullableDates(firstDate: string | null, secondDate: string | nul
   return first - second
 }
 
-function createRelativeIsoDate(days: number, hours = 0) {
-  const date = new Date()
-  date.setDate(date.getDate() + days)
-  date.setHours(date.getHours() + hours, 0, 0, 0)
-  return date.toISOString()
-}
-
-function createMockActivityItems(): DashboardActivityItem[] {
-  return [
-    {
-      description: 'Proposal follow-up prepared for Acme Roofing.',
-      id: 'mock-activity-1',
-      isMock: true,
-      timestamp: createRelativeIsoDate(0, -1),
-      title: 'Email draft queued',
-      tone: 'success',
-    },
-    {
-      description: 'Northside Remodel moved into pending review.',
-      id: 'mock-activity-2',
-      isMock: true,
-      timestamp: createRelativeIsoDate(-1),
-      title: 'Proposal status updated',
-      tone: 'warning',
-    },
-    {
-      description: 'Valley HVAC appointment reminder is ready for today.',
-      id: 'mock-activity-3',
-      isMock: true,
-      timestamp: createRelativeIsoDate(-2),
-      title: 'Follow-up scheduled',
-      tone: 'info',
-    },
-  ]
-}
-
 function App() {
   const diagnosticIdRef = useRef(0)
   const [session, setSession] = useState<AuthSession | null>(null)
@@ -681,6 +657,12 @@ function App() {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([])
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false)
+  const [isAdminRoute, setIsAdminRoute] = useState(() =>
+    typeof window === 'undefined' ? false : isAdminPath(window.location.pathname),
+  )
+  const [adminState, setAdminState] = useState<AdminPlatformState | null>(null)
+  const [isLoadingAdmin, setIsLoadingAdmin] = useState(false)
+  const [busyAdminAccountId, setBusyAdminAccountId] = useState<string | null>(null)
   const [activeDashboardPage, setActiveDashboardPage] = useState<DashboardPageId>(() =>
     getInitialDashboardPage(),
   )
@@ -791,6 +773,7 @@ function App() {
         setSession(null)
         setAppState(null)
         setSettingsForm(null)
+        setAdminState(null)
       }
 
       setNotice({
@@ -802,6 +785,69 @@ function App() {
       setLoading(false)
     }
   })
+
+  async function refreshAdminState() {
+    setIsLoadingAdmin(true)
+
+    try {
+      const nextAdminState = await webApp.getAdminState()
+      setAdminState(nextAdminState)
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Refresh super admin state', error)
+    } finally {
+      setIsLoadingAdmin(false)
+    }
+  }
+
+  const refreshAdminStateFromEffect = useEffectEvent(async () => {
+    await refreshAdminState()
+  })
+
+  async function handleAdminPlanChange(accountId: string, plan: AccountPlan) {
+    setBusyAdminAccountId(accountId)
+
+    try {
+      const nextAdminState = await webApp.updateAccountPlan(accountId, plan)
+      setAdminState(nextAdminState)
+      setNotice({
+        tone: 'success',
+        message: 'Account plan updated.',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Update account plan', error)
+    } finally {
+      setBusyAdminAccountId(null)
+    }
+  }
+
+  async function handleAdminStatusChange(accountId: string, status: AccountStatus) {
+    setBusyAdminAccountId(accountId)
+
+    try {
+      const nextAdminState = await webApp.updateAccountStatus(accountId, status)
+      setAdminState(nextAdminState)
+      setNotice({
+        tone: 'success',
+        message: status === 'suspended' ? 'Account suspended.' : 'Account activated.',
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Update account status', error)
+    } finally {
+      setBusyAdminAccountId(null)
+    }
+  }
 
   const syncAuthSession = useEffectEvent(async () => {
     try {
@@ -906,13 +952,19 @@ function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
+      setIsAdminRoute(isAdminPath(window.location.pathname))
       setActiveDashboardPage(getInitialDashboardPage())
+    }
+    const handlePopState = () => {
+      setIsAdminRoute(isAdminPath(window.location.pathname))
     }
 
     window.addEventListener('hashchange', handleHashChange)
+    window.addEventListener('popstate', handlePopState)
 
     return () => {
       window.removeEventListener('hashchange', handleHashChange)
+      window.removeEventListener('popstate', handlePopState)
     }
   }, [])
 
@@ -997,6 +1049,7 @@ function App() {
           setAppState(null)
           setSettingsForm(null)
           setGmailConnection(null)
+          setAdminState(null)
           return
         }
 
@@ -1034,6 +1087,20 @@ function App() {
       window.clearInterval(intervalId)
     }
   }, [session])
+
+  useEffect(() => {
+    if (!session || !isAdminRoute) {
+      return
+    }
+
+    const adminRefreshId = window.setTimeout(() => {
+      void refreshAdminStateFromEffect()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(adminRefreshId)
+    }
+  }, [session, isAdminRoute])
 
   useEffect(() => {
     if (!session) {
@@ -1298,6 +1365,11 @@ function App() {
   }
 
   function openDashboardPage(pageId: DashboardPageId, targetId: string = pageId) {
+    if (isAdminRoute) {
+      window.history.pushState({}, document.title, '/')
+      setIsAdminRoute(false)
+    }
+
     setActiveDashboardPage(pageId)
 
     const nextUrl = new URL(window.location.href)
@@ -1324,6 +1396,17 @@ function App() {
     openDashboardPage(getDashboardPageForSection(sectionId), sectionId)
   }
 
+  function openAdminPanel() {
+    window.history.pushState({}, document.title, '/admin')
+    setIsAdminRoute(true)
+    window.setTimeout(() => {
+      document.querySelector('.dashboard-workspace')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }, 0)
+  }
+
   async function handleRecoveryExit() {
     clearAuthRecoveryUrl()
     setAuthForm(createInitialAuthForm())
@@ -1339,6 +1422,7 @@ function App() {
       setAppState(null)
       setSettingsForm(null)
       setGmailConnection(null)
+      setAdminState(null)
       setNotice({
         tone: 'info',
         message: 'Password recovery was canceled. You can log in again when ready.',
@@ -1359,6 +1443,7 @@ function App() {
       setAppState(null)
       setSettingsForm(null)
       setGmailConnection(null)
+      setAdminState(null)
       setNotice({
         tone: 'info',
         message: 'You have been signed out.',
@@ -2163,7 +2248,6 @@ function App() {
     isOverdue(proposal.nextFollowUpAt),
   )
   const dueProposalFollowUps = sortedOpenProposals.filter(isProposalFollowUpDue)
-  const usingMockDashboardData = appState.clients.length === 0 && appState.proposals.length === 0
   const searchQuery = dashboardSearch.trim().toLowerCase()
   const filteredDirectoryClients = appState.clients.filter((client) => {
     if (!searchQuery) {
@@ -2290,7 +2374,6 @@ function App() {
       client.history.map((item) => ({
         description: item.error || `${client.name} · ${item.subject}`,
         id: item.id,
-        isMock: false,
         timestamp: item.happenedAt,
         title: item.status === 'prepared' ? 'Draft opened' : 'Draft error',
         tone: item.status === 'prepared' ? ('success' as const) : ('danger' as const),
@@ -2300,7 +2383,6 @@ function App() {
       proposal.history.map((item) => ({
         description: item.error || `${proposal.clientName} · ${item.subject}`,
         id: item.id,
-        isMock: false,
         timestamp: item.happenedAt,
         title: item.status === 'prepared' ? 'Proposal follow-up sent' : 'Proposal follow-up error',
         tone: item.status === 'prepared' ? ('success' as const) : ('danger' as const),
@@ -2313,62 +2395,280 @@ function App() {
       return secondTime - firstTime
     })
     .slice(0, 5)
-  const activityItems = recentActivityFromClients.length
-    ? recentActivityFromClients
-    : createMockActivityItems()
+  const activityItems = recentActivityFromClients
   const kpiCards = [
     {
-      helper: usingMockDashboardData ? 'Demo queue until your first appointment is saved' : 'Scheduled for today',
+      helper: 'Scheduled for today',
       label: 'Appointment emails due',
-      value: String(usingMockDashboardData ? 6 : dueTodayClients.length),
+      value: String(dueTodayClients.length),
     },
     {
-      helper: usingMockDashboardData ? 'Demo overdue opportunities' : 'Need attention before they go cold',
+      helper: 'Need attention before they go cold',
       label: 'Overdue appointments',
       tone: 'danger',
-      value: String(usingMockDashboardData ? 2 : overdueClients.length),
+      value: String(overdueClients.length),
     },
     {
-      helper: usingMockDashboardData
-        ? 'Demo proposal follow-up queue'
-        : `${dueProposalFollowUps.length} proposal follow-ups due now`,
+      helper: `${dueProposalFollowUps.length} proposal follow-ups due now`,
       label: 'Active proposal follow-ups',
-      value: String(usingMockDashboardData ? 7 : openProposals.length),
+      value: String(openProposals.length),
     },
     {
-      helper: usingMockDashboardData
-        ? 'Demo proposal reminders'
-        : 'Proposal emails ready to send today',
+      helper: 'Proposal emails ready to send today',
       label: 'Proposal emails due',
       tone: 'accent',
-      value: String(usingMockDashboardData ? 4 : dueTodayProposals.length + overdueProposals.length),
+      value: String(dueTodayProposals.length + overdueProposals.length),
     },
   ]
   const proposalPipeline = [
     {
-      count: usingMockDashboardData ? 4 : openProposals.length,
+      count: openProposals.length,
       label: 'Active',
       value: 'Proposal follow-ups in progress',
     },
     {
-      count: usingMockDashboardData ? 2 : dueProposalFollowUps.length,
+      count: dueProposalFollowUps.length,
       label: 'Due now',
       tone: 'warning',
       value: 'Ready for the next email',
     },
     {
-      count: usingMockDashboardData ? 1 : finishedProposals.length,
+      count: finishedProposals.length,
       label: 'Completed',
       tone: 'success',
       value: 'Sequence completed',
     },
     {
-      count: usingMockDashboardData ? 1 : pausedProposals.length,
+      count: pausedProposals.length,
       label: 'Paused',
       tone: 'danger',
       value: 'Stopped manually',
     },
   ]
+
+  if (isAdminRoute) {
+    const canAccessAdmin = appState.currentUser.role === 'super_admin'
+
+    return (
+      <main className="dashboard-shell super-admin-shell">
+        {diagnosticsPanel}
+
+        <aside className="dashboard-sidebar">
+          <div className="sidebar-brand">
+            <img alt="Hessa Enterprises" src={logoWordmark} />
+            <div>
+              <span className="eyebrow">Platform owner</span>
+              <strong>Super Admin</strong>
+            </div>
+          </div>
+
+          <nav className="sidebar-nav" aria-label="Admin navigation">
+            <button className="sidebar-nav-item sidebar-nav-item-active" type="button">
+              <span>Accounts</span>
+            </button>
+            <button
+              className="sidebar-nav-item"
+              onClick={() => openDashboardPage('dashboard')}
+              type="button"
+            >
+              <span>Workspace</span>
+            </button>
+          </nav>
+
+          <div className="sidebar-summary">
+            <span>Admin role</span>
+            <strong>{appState.currentUser.role}</strong>
+            <small>{appState.currentUser.email}</small>
+          </div>
+        </aside>
+
+        <div className="dashboard-workspace">
+          <header className="dashboard-topbar">
+            <div className="dashboard-search admin-route-pill">
+              <span>Route</span>
+              <strong>/admin</strong>
+            </div>
+
+            <button
+              className="secondary-button dashboard-new-client"
+              onClick={() => openDashboardPage('dashboard')}
+              type="button"
+            >
+              Back to workspace
+            </button>
+
+            <button className="ghost-button dashboard-logout" onClick={() => void handleLogout()} type="button">
+              Logout
+            </button>
+          </header>
+
+          {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
+
+          {!canAccessAdmin ? (
+            <section className="dashboard-card">
+              <span className="eyebrow">Access denied</span>
+              <h1>Only super admins can open the master panel.</h1>
+              <p className="dashboard-card-copy">
+                Your current role is {appState.currentUser.role}. Normal users can only access their
+                own account workspace.
+              </p>
+            </section>
+          ) : (
+            <>
+              <section className="dashboard-overview">
+                <div className="dashboard-heading">
+                  <div>
+                    <span className="eyebrow">SaaS control layer</span>
+                    <h1>Master admin panel</h1>
+                    <p>
+                      Manage accounts, users, subscription readiness, and account access before
+                      payments are connected.
+                    </p>
+                  </div>
+                  <span className="demo-data-badge live-data-badge">Payments disabled</span>
+                </div>
+
+                <div className="dashboard-overview-grid">
+                  {[
+                    ['Accounts', adminState?.metrics.totalAccounts ?? 0],
+                    ['Users', adminState?.metrics.totalUsers ?? 0],
+                    ['Active accounts', adminState?.metrics.activeAccounts ?? 0],
+                    ['Suspended', adminState?.metrics.suspendedAccounts ?? 0],
+                  ].map(([label, value]) => (
+                    <article className="pipeline-stage" key={label}>
+                      <span>{label}</span>
+                      <strong>{value}</strong>
+                      <small>Platform metric</small>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="dashboard-card">
+                <div className="dashboard-card-header">
+                  <div>
+                    <span className="eyebrow">Accounts</span>
+                    <h2>Registered workspaces</h2>
+                  </div>
+                  <button
+                    className="secondary-button compact-action"
+                    disabled={isLoadingAdmin}
+                    onClick={() => void refreshAdminState()}
+                    type="button"
+                  >
+                    {isLoadingAdmin ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+
+                {isLoadingAdmin && !adminState ? (
+                  <div className="dashboard-empty-state">
+                    <h3>Loading accounts...</h3>
+                    <p>Preparing platform metrics.</p>
+                  </div>
+                ) : adminState?.accounts.length ? (
+                  <div className="admin-account-list">
+                    {adminState.accounts.map((account) => (
+                      <article className="admin-account-card" key={account.id}>
+                        <div className="admin-account-head">
+                          <div>
+                            <span className={`status-pill pill-${account.status === 'active' ? 'active' : 'canceled'}`}>
+                              {account.status}
+                            </span>
+                            <h3>{account.name}</h3>
+                            <p>{account.id}</p>
+                          </div>
+                          <div className="admin-account-controls">
+                            <label className="field">
+                              <span>Plan</span>
+                              <select
+                                className="select-input"
+                                disabled={busyAdminAccountId === account.id}
+                                onChange={(event) =>
+                                  void handleAdminPlanChange(
+                                    account.id,
+                                    event.target.value as AccountPlan,
+                                  )
+                                }
+                                value={account.plan}
+                              >
+                                {accountPlanOptions.map((plan) => (
+                                  <option key={plan} value={plan}>
+                                    {plan}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label className="field">
+                              <span>Status</span>
+                              <select
+                                className="select-input"
+                                disabled={busyAdminAccountId === account.id}
+                                onChange={(event) =>
+                                  void handleAdminStatusChange(
+                                    account.id,
+                                    event.target.value as AccountStatus,
+                                  )
+                                }
+                                value={account.status}
+                              >
+                                {accountStatusOptions.map((status) => (
+                                  <option key={status} value={status}>
+                                    {status}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="admin-account-metrics">
+                          <div>
+                            <span>Subscription</span>
+                            <strong>{account.subscriptionStatus}</strong>
+                          </div>
+                          <div>
+                            <span>Appointments</span>
+                            <strong>{account.appointmentCount}</strong>
+                          </div>
+                          <div>
+                            <span>Proposals</span>
+                            <strong>{account.proposalCount}</strong>
+                          </div>
+                          <div>
+                            <span>Emails sent</span>
+                            <strong>{account.emailCount}</strong>
+                          </div>
+                        </div>
+
+                        <div className="admin-user-list">
+                          {account.users.map((user) => (
+                            <div className="admin-user-row" key={user.userId}>
+                              <span>{getInitials(user.name || user.email)}</span>
+                              <div>
+                                <strong>{user.name || user.email}</strong>
+                                <small>{user.email}</small>
+                              </div>
+                              <em>{user.role}</em>
+                            </div>
+                          ))}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="dashboard-empty-state">
+                    <h3>No accounts registered yet</h3>
+                    <p>Accounts will appear here as users sign up or log in.</p>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </div>
+      </main>
+    )
+  }
 
   return (
     <main className="dashboard-shell">
@@ -2398,15 +2698,18 @@ function App() {
               <span>{item.label}</span>
             </button>
           ))}
+          {appState.currentUser.role === 'super_admin' ? (
+            <button className="sidebar-nav-item" onClick={openAdminPanel} type="button">
+              <span>Super Admin</span>
+            </button>
+          ) : null}
         </nav>
 
         <div className="sidebar-summary">
           <span>Workspace health</span>
-          <strong>{activeWorkflowCount || (usingMockDashboardData ? 7 : 0)} active</strong>
+          <strong>{activeWorkflowCount} active</strong>
           <small>
-            {usingMockDashboardData
-              ? 'Demo data is visible until you save your first appointment.'
-              : `${appState.clients.length} appointments and ${appState.proposals.length} proposals tracked.`}
+            {`${appState.clients.length} appointments and ${appState.proposals.length} proposals tracked.`}
           </small>
         </div>
       </aside>
@@ -2549,11 +2852,7 @@ function App() {
               </p>
             </div>
 
-            {usingMockDashboardData ? (
-              <span className="demo-data-badge">Demo data shown until first appointment</span>
-            ) : (
-              <span className="demo-data-badge live-data-badge">Live workspace data</span>
-            )}
+            <span className="demo-data-badge live-data-badge">Live workspace data</span>
           </div>
 
           <div className="dashboard-kpi-grid">
@@ -2588,7 +2887,6 @@ function App() {
                   <span className="eyebrow">Pipeline</span>
                   <h2>Proposal overview</h2>
                 </div>
-                {usingMockDashboardData ? <span className="mock-data-pill">Demo</span> : null}
               </div>
 
               <div className="pipeline-stage-list">
@@ -2603,7 +2901,7 @@ function App() {
 
               <button
                 className="secondary-button full-width"
-                disabled={isProcessingProposalQueue || usingMockDashboardData}
+                disabled={isProcessingProposalQueue || appState.proposals.length === 0}
                 onClick={() => void handleProcessProposalQueue()}
                 type="button"
               >
@@ -2623,21 +2921,27 @@ function App() {
                   <span className="eyebrow">Activity</span>
                   <h2>Recent activity</h2>
                 </div>
-                {activityItems.some((item) => item.isMock) ? <span className="mock-data-pill">Demo</span> : null}
               </div>
 
-              <div className="activity-feed">
-                {activityItems.map((item) => (
-                  <div className={`activity-item activity-${item.tone}`} key={item.id}>
-                    <span></span>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <p>{item.description}</p>
-                      <small>{formatDateTime(item.timestamp)}</small>
+              {activityItems.length === 0 ? (
+                <div className="dashboard-empty-state">
+                  <h3>No recent activity yet</h3>
+                  <p>Activity will appear here after appointment or proposal emails are sent.</p>
+                </div>
+              ) : (
+                <div className="activity-feed">
+                  {activityItems.map((item) => (
+                    <div className={`activity-item activity-${item.tone}`} key={item.id}>
+                      <span></span>
+                      <div>
+                        <strong>{item.title}</strong>
+                        <p>{item.description}</p>
+                        <small>{formatDateTime(item.timestamp)}</small>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </article>
           </div>
         </section>

@@ -4,11 +4,47 @@ export type RuntimeInfo = {
   storage: 'localStorage'
 }
 
+export type UserRole = 'admin' | 'owner' | 'staff' | 'super_admin' | 'viewer'
+export type AccountPlan = 'basic' | 'business' | 'free' | 'pro'
+export type SubscriptionStatus =
+  | 'active'
+  | 'cancelled'
+  | 'free'
+  | 'past_due'
+  | 'suspended'
+  | 'trial'
+export type AccountStatus = 'active' | 'suspended'
+
 export type AuthUser = {
+  accountId: string
   id: string
   name: string
   email: string
   createdAt: string
+  role: UserRole
+}
+
+export type AccountRecord = {
+  id: string
+  name: string
+  ownerUserId: string
+  plan: AccountPlan
+  subscriptionStatus: SubscriptionStatus
+  status: AccountStatus
+  trialEndsAt: string | null
+  subscriptionStartedAt: string | null
+  subscriptionEndsAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type AccountUserRecord = {
+  accountId: string
+  email: string
+  joinedAt: string
+  name: string
+  role: UserRole
+  userId: string
 }
 
 export type AuthSession = {
@@ -25,6 +61,7 @@ export type ClientStatus = 'active' | 'finished' | 'canceled'
 export type ProposalStatus = 'active' | 'finished' | 'canceled'
 
 export type EmailTemplate = {
+  accountId: string
   id: string
   title: string
   subject: string
@@ -32,6 +69,7 @@ export type EmailTemplate = {
 }
 
 export type FollowUpHistoryItem = {
+  accountId: string
   id: string
   contactNumber: number
   status: FollowUpStatus
@@ -43,6 +81,7 @@ export type FollowUpHistoryItem = {
 }
 
 export type ClientRecord = {
+  accountId: string
   id: string
   name: string
   email: string
@@ -63,6 +102,7 @@ export type ClientRecord = {
 }
 
 export type ProposalRecord = {
+  accountId: string
   id: string
   clientName: string
   email: string
@@ -92,6 +132,7 @@ export type DashboardStats = {
 }
 
 export type SettingsState = {
+  accountId: string
   sender: {
     fromEmail: string
     fromName: string
@@ -105,12 +146,36 @@ export type SettingsState = {
 }
 
 export type AppState = {
+  account: AccountRecord
   currentUser: AuthUser
   runtimeInfo: RuntimeInfo
   settings: SettingsState
   stats: DashboardStats
   clients: ClientRecord[]
   proposals: ProposalRecord[]
+}
+
+export type AdminAccountSummary = AccountRecord & {
+  activeUsers: number
+  appointmentCount: number
+  emailCount: number
+  proposalCount: number
+  users: AccountUserRecord[]
+}
+
+export type AdminMetrics = {
+  activeAccounts: number
+  appointmentCount: number
+  emailCount: number
+  proposalCount: number
+  suspendedAccounts: number
+  totalAccounts: number
+  totalUsers: number
+}
+
+export type AdminPlatformState = {
+  accounts: AdminAccountSummary[]
+  metrics: AdminMetrics
 }
 
 export type ProcessResult = {

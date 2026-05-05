@@ -29,6 +29,28 @@ export function createAdminClient() {
   })
 }
 
+export async function getUserPrimaryAccountId(
+  supabase: ReturnType<typeof createAdminClient>,
+  userId: string,
+) {
+  const { data, error } = await supabase
+    .from('account_users')
+    .select('account_id')
+    .eq('user_id', userId)
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    if (error.code === '42P01') {
+      return null
+    }
+
+    throw new Error(error.message)
+  }
+
+  return typeof data?.account_id === 'string' ? data.account_id : null
+}
+
 export async function getAuthenticatedUser(req: Request) {
   const authHeader = req.headers.get('Authorization') ?? ''
   const token = authHeader.replace('Bearer ', '').trim()
