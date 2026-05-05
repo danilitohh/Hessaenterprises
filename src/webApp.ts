@@ -2071,7 +2071,41 @@ async function getAdminPlatformStateFromSupabase() {
   }
 }
 
+async function getAdminPlatformStateFromEdge() {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase.functions.invoke<AdminPlatformState>(
+    'admin-platform-state',
+  )
+
+  if (error) {
+    const normalizedError = error && typeof error === 'object' ? error : Object.create(null)
+    const context =
+      'context' in normalizedError && normalizedError.context instanceof Response
+        ? normalizedError.context
+        : null
+    const message = error.message ?? ''
+
+    if (
+      context?.status === 404 ||
+      message.includes('Failed to send a request to the Edge Function') ||
+      message.includes('Function not found')
+    ) {
+      return null
+    }
+
+    throw new Error(message)
+  }
+
+  return data ?? null
+}
+
 async function getBestAdminPlatformState() {
+  const edgeState = await getAdminPlatformStateFromEdge()
+
+  if (edgeState) {
+    return edgeState
+  }
+
   const localState = getAdminPlatformState()
   const supabaseState = await getAdminPlatformStateFromSupabase()
 

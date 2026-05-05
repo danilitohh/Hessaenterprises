@@ -80,6 +80,14 @@ supabase db push
 
 La migracion `supabase/migrations/202605050001_saas_multi_tenant.sql` crea `accounts`, `account_users`, campos de monetizacion futura, tablas base para appointments/proposals/follow-ups/templates, `account_id` en registros de Gmail y politicas RLS.
 
+Para que el super admin vea absolutamente todos los usuarios registrados en Supabase Auth, despliega tambien:
+
+```bash
+supabase functions deploy admin-platform-state
+```
+
+Esa funcion usa service-role en Supabase, valida que el usuario sea `kevin.hessam@gmail.com` o `danilitohhh@gmail.com`, y devuelve la lista completa de `auth.users` al panel `/admin`.
+
 ## Build
 
 ```bash
