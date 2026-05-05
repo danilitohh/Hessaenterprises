@@ -1946,6 +1946,75 @@
   color: var(--ink-strong);
 }
 
+.template-picker-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+  padding: 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(185, 138, 74, 0.1), transparent 28%),
+    rgba(255, 255, 255, 0.82);
+}
+
+.template-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(23, 40, 58, 0.28);
+  backdrop-filter: blur(10px);
+}
+
+.template-modal {
+  display: grid;
+  gap: 18px;
+  width: min(760px, 100%);
+  max-height: min(860px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line-soft);
+  border-radius: 30px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(196, 154, 108, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(255, 253, 248, 0.98), rgba(247, 242, 234, 0.98));
+  box-shadow: 0 32px 80px rgba(23, 40, 58, 0.24);
+}
+
+.template-modal-header,
+.template-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.template-modal-header h2 {
+  margin-top: 6px;
+  color: var(--ink-strong);
+}
+
+.template-modal-body {
+  display: grid;
+  gap: 16px;
+}
+
+.template-modal-body textarea {
+  min-height: 280px;
+}
+
+.template-modal-tokens {
+  min-height: auto;
+}
+
+.template-modal-actions {
+  justify-content: flex-end;
+}
+
 .template-editor-head {
   display: flex;
   align-items: center;
@@ -2580,7 +2649,8 @@
   .client-workspace-grid,
   .proposal-workspace-grid,
   .followup-detail-grid,
-  .pipeline-stage-list {
+  .pipeline-stage-list,
+  .template-picker-card {
     grid-template-columns: 1fr;
   }
 
@@ -2596,6 +2666,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .template-modal {
+    padding: 18px;
+    border-radius: 24px;
+  }
+
+  .template-modal-actions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .proposal-value {

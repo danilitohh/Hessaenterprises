@@ -6,6 +6,7 @@ import type {
   AuthUser,
   ClientInput,
   ClientRecord,
+  EmailTemplate,
   FollowUpHistoryItem,
   LoginInput,
   PasswordResetInput,
@@ -22,7 +23,8 @@ import { getSupabaseClient, supabaseFunctionBaseUrl } from './supabaseClient'
 
 const LEGACY_STORAGE_KEY = 'hessa-followup-web'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
-const MAX_CONTACTS = 4
+const DEFAULT_TRY_COUNT = 4
+const MAX_SEQUENCE_TRIES = 100
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
 const statusPriority = {
   active: 0,
@@ -55,81 +57,89 @@ type GmailSendFunctionResponse = {
   sent: boolean
 }
 
-function createDefaultTemplates() {
-  return Array.from({ length: MAX_CONTACTS }, (_, index) => {
-    const contactNumber = index + 1
-
-    return {
-      id: `contact-${contactNumber}`,
-      title: `Touchpoint ${contactNumber}`,
-      subject: `Follow-up ${contactNumber} of {{maxContacts}} for {{name}}`,
-      body: [
-        'Hi {{name}},',
-        '',
-        `I wanted to follow up on touchpoint ${contactNumber} of {{maxContacts}}.`,
-        'We are still available to answer questions and help you move forward.',
-        '',
-        'If you would like to continue the conversation, just reply and we will take it from there.',
-        '',
-        'Best,',
-        '{{fromName}}',
-      ].join('\n'),
-    }
-  })
+function createDefaultTemplate(contactNumber: number): EmailTemplate {
+  return {
+    id: `contact-${contactNumber}`,
+    title: `Touchpoint ${contactNumber}`,
+    subject: `Follow-up ${contactNumber} of {{maxContacts}} for {{name}}`,
+    body: [
+      'Hi {{name}},',
+      '',
+      `I wanted to follow up on touchpoint ${contactNumber} of {{maxContacts}}.`,
+      'We are still available to answer questions and help you move forward.',
+      '',
+      'If you would like to continue the conversation, just reply and we will take it from there.',
+      '',
+      'Best,',
+      '{{fromName}}',
+    ].join('\n'),
+  }
 }
 
-function createDefaultProposalTemplates() {
-  return Array.from({ length: MAX_CONTACTS }, (_, index) => {
-    const contactNumber = index + 1
-
-    return {
-      id: `proposal-contact-${contactNumber}`,
-      title: `Proposal touchpoint ${contactNumber}`,
-      subject:
-        contactNumber > 1
-          ? `Following up on the proposal we sent - follow-up ${contactNumber}`
-          : 'Following up on the proposal we sent',
-      body: [
-        'Hi {{name}},',
-        '',
-        'I wanted to follow up on the proposal we sent.',
-        'Do you have any questions, or would you like to move forward with the next step?',
-        '',
-        'If it is helpful, reply here and we will take it from there.',
-        '',
-        'Best,',
-        '{{fromName}}',
-      ].join('\n'),
-    }
-  })
+function createDefaultTemplates(count = DEFAULT_TRY_COUNT) {
+  return Array.from({ length: count }, (_, index) => createDefaultTemplate(index + 1))
 }
 
-function createLegacyDefaultTemplates() {
-  return Array.from({ length: MAX_CONTACTS }, (_, index) => {
-    const contactNumber = index + 1
-
-    return {
-      subject: `Seguimiento ${contactNumber} de {{maxContacts}} para {{name}}`,
-      body: [
-        'Hola {{name}},',
-        '',
-        `Te escribimos para dar continuidad a nuestro contacto ${contactNumber} de {{maxContacts}}.`,
-        'Seguimos atentos a tu interes y a cualquier duda que tengas.',
-        '',
-        'Si quieres continuar, responde este correo y te ayudamos de inmediato.',
-        '',
-        'Saludos,',
-        '{{fromName}}',
-      ].join('\n'),
-    }
-  })
+function createDefaultProposalTemplate(contactNumber: number): EmailTemplate {
+  return {
+    id: `proposal-contact-${contactNumber}`,
+    title: `Proposal touchpoint ${contactNumber}`,
+    subject:
+      contactNumber > 1
+        ? `Following up on the proposal we sent - follow-up ${contactNumber}`
+        : 'Following up on the proposal we sent',
+    body: [
+      'Hi {{name}},',
+      '',
+      'I wanted to follow up on the proposal we sent.',
+      'Do you have any questions, or would you like to move forward with the next step?',
+      '',
+      'If it is helpful, reply here and we will take it from there.',
+      '',
+      'Best,',
+      '{{fromName}}',
+    ].join('\n'),
+  }
 }
 
-function createLegacyDefaultProposalTemplates() {
-  return createDefaultProposalTemplates().map((template) => ({
+function createDefaultProposalTemplates(count = DEFAULT_TRY_COUNT) {
+  return Array.from({ length: count }, (_, index) => createDefaultProposalTemplate(index + 1))
+}
+
+function createLegacyDefaultTemplate(contactNumber: number) {
+  return {
+    subject: `Seguimiento ${contactNumber} de {{maxContacts}} para {{name}}`,
+    body: [
+      'Hola {{name}},',
+      '',
+      `Te escribimos para dar continuidad a nuestro contacto ${contactNumber} de {{maxContacts}}.`,
+      'Seguimos atentos a tu interes y a cualquier duda que tengas.',
+      '',
+      'Si quieres continuar, responde este correo y te ayudamos de inmediato.',
+      '',
+      'Saludos,',
+      '{{fromName}}',
+    ].join('\n'),
+  }
+}
+
+function createLegacyDefaultTemplates(count = DEFAULT_TRY_COUNT) {
+  return Array.from({ length: count }, (_, index) => createLegacyDefaultTemplate(index + 1))
+}
+
+function createLegacyDefaultProposalTemplate(contactNumber: number) {
+  const template = createDefaultProposalTemplate(contactNumber)
+
+  return {
     subject: template.subject,
     body: template.body,
-  }))
+  }
+}
+
+function createLegacyDefaultProposalTemplates(count = DEFAULT_TRY_COUNT) {
+  return Array.from({ length: count }, (_, index) =>
+    createLegacyDefaultProposalTemplate(index + 1),
+  )
 }
 
 const defaultDatabase: Database = Object.freeze({
@@ -170,13 +180,17 @@ function toStoredEmail(email: string) {
   return email.trim().toLowerCase()
 }
 
+function getDefaultScheduleTime(index: number) {
+  return DEFAULT_SCHEDULE_TIMES[index % DEFAULT_SCHEDULE_TIMES.length] || '09:00'
+}
+
 function clampTargetContacts(value: unknown) {
-  if (!Number.isInteger(value)) {
-    return MAX_CONTACTS
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_TRY_COUNT
   }
 
-  const numericValue = value as number
-  return Math.min(MAX_CONTACTS, Math.max(1, numericValue))
+  const numericValue = Math.trunc(value as number)
+  return Math.min(MAX_SEQUENCE_TRIES, Math.max(1, numericValue))
 }
 
 function normalizeScheduleTime(value: unknown, fallback = '09:00') {
@@ -192,15 +206,23 @@ function normalizeTemplates(
   rawTemplates: unknown,
   defaults = createDefaultTemplates(),
   legacyDefaults = createLegacyDefaultTemplates(),
+  createFallbackTemplate = createDefaultTemplate,
+  createLegacyFallbackTemplate = createLegacyDefaultTemplate,
 ) {
+  const incomingTemplates = Array.isArray(rawTemplates) ? rawTemplates : []
+  const desiredCount = Math.max(defaults.length, incomingTemplates.length)
+  const expandedDefaults = Array.from(
+    { length: desiredCount },
+    (_, index) => defaults[index] ?? createFallbackTemplate(index + 1),
+  )
+  const expandedLegacyDefaults = Array.from(
+    { length: desiredCount },
+    (_, index) => legacyDefaults[index] ?? createLegacyFallbackTemplate(index + 1),
+  )
 
-  if (!Array.isArray(rawTemplates) || rawTemplates.length === 0) {
-    return defaults
-  }
-
-  return defaults.map((template, index) => {
-    const incomingTemplate = rawTemplates[index]
-    const legacyTemplate = legacyDefaults[index]
+  return expandedDefaults.map((template, index) => {
+    const incomingTemplate = incomingTemplates[index]
+    const legacyTemplate = expandedLegacyDefaults[index]
     const subject =
       incomingTemplate &&
       typeof incomingTemplate === 'object' &&
@@ -229,6 +251,23 @@ function normalizeTemplates(
       body,
     }
   })
+}
+
+function ensureTemplateCount(
+  templates: EmailTemplate[],
+  targetCount: number,
+  createTemplate: (contactNumber: number) => EmailTemplate,
+) {
+  if (templates.length >= targetCount) {
+    return templates
+  }
+
+  return [
+    ...templates,
+    ...Array.from({ length: targetCount - templates.length }, (_, index) =>
+      createTemplate(templates.length + index + 1),
+    ),
+  ]
 }
 
 function normalizeHistory(rawHistory: unknown) {
@@ -283,7 +322,7 @@ function normalizeClient(rawClient: unknown): ClientRecord {
   const targetContacts =
     'targetContacts' in normalized
       ? clampTargetContacts(normalized.targetContacts)
-      : MAX_CONTACTS
+      : DEFAULT_TRY_COUNT
   const sentContacts =
     'sentContacts' in normalized &&
     Number.isInteger(normalized.sentContacts) &&
@@ -295,7 +334,7 @@ function normalizeClient(rawClient: unknown): ClientRecord {
       ? normalized.contactScheduleTimes
       : DEFAULT_SCHEDULE_TIMES
   const contactScheduleTimes = Array.from({ length: targetContacts }, (_, index) =>
-    normalizeScheduleTime(scheduleSource[index], DEFAULT_SCHEDULE_TIMES[index]),
+    normalizeScheduleTime(scheduleSource[index], getDefaultScheduleTime(index)),
   )
 
   let status: ClientRecord['status'] = 'active'
@@ -377,7 +416,7 @@ function normalizeProposal(rawProposal: unknown): ProposalRecord {
   const targetFollowUps =
     'targetFollowUps' in normalized
       ? clampTargetContacts(normalized.targetFollowUps)
-      : MAX_CONTACTS
+      : DEFAULT_TRY_COUNT
   const sentFollowUps =
     'sentFollowUps' in normalized &&
     Number.isInteger(normalized.sentFollowUps) &&
@@ -389,7 +428,7 @@ function normalizeProposal(rawProposal: unknown): ProposalRecord {
       ? normalized.followUpScheduleTimes
       : DEFAULT_SCHEDULE_TIMES
   const followUpScheduleTimes = Array.from({ length: targetFollowUps }, (_, index) =>
-    normalizeScheduleTime(scheduleSource[index], DEFAULT_SCHEDULE_TIMES[index]),
+    normalizeScheduleTime(scheduleSource[index], getDefaultScheduleTime(index)),
   )
   let status = normalizeProposalStatus('status' in normalized ? normalized.status : 'active')
   if (sentFollowUps >= targetFollowUps && status !== 'canceled') {
@@ -490,6 +529,8 @@ function normalizeDatabase(rawData: unknown): Database {
       'proposalTemplates' in rawSettings ? rawSettings.proposalTemplates : [],
       createDefaultProposalTemplates(),
       createLegacyDefaultProposalTemplates(),
+      createDefaultProposalTemplate,
+      createLegacyDefaultProposalTemplate,
     ),
     automation: {
       intervalDays:
@@ -515,6 +556,26 @@ function normalizeDatabase(rawData: unknown): Database {
     'proposals' in normalized && Array.isArray(normalized.proposals)
       ? normalized.proposals.map(normalizeProposal)
       : []
+
+  const requiredAppointmentTemplates = Math.max(
+    DEFAULT_TRY_COUNT,
+    ...database.clients.map((client) => client.targetContacts),
+  )
+  const requiredProposalTemplates = Math.max(
+    DEFAULT_TRY_COUNT,
+    ...database.proposals.map((proposal) => proposal.targetFollowUps),
+  )
+
+  database.settings.templates = ensureTemplateCount(
+    database.settings.templates,
+    requiredAppointmentTemplates,
+    createDefaultTemplate,
+  )
+  database.settings.proposalTemplates = ensureTemplateCount(
+    database.settings.proposalTemplates,
+    requiredProposalTemplates,
+    createDefaultProposalTemplate,
+  )
 
   return database
 }
@@ -1033,6 +1094,8 @@ function mergeSettings(currentSettings: SettingsState, incomingSettings: Setting
     incomingSettings.proposalTemplates,
     createDefaultProposalTemplates(),
     createLegacyDefaultProposalTemplates(),
+    createDefaultProposalTemplate,
+    createLegacyDefaultProposalTemplate,
   )
 
   return {
@@ -1045,18 +1108,24 @@ function mergeSettings(currentSettings: SettingsState, incomingSettings: Setting
       title: template.title,
       subject:
         incomingSettings.templates[index]?.subject?.trim() ||
-        currentSettings.templates[index].subject,
-      body: incomingSettings.templates[index]?.body || currentSettings.templates[index].body,
+        currentSettings.templates[index]?.subject ||
+        template.subject,
+      body:
+        incomingSettings.templates[index]?.body ||
+        currentSettings.templates[index]?.body ||
+        template.body,
     })),
     proposalTemplates: normalizedProposalTemplates.map((template, index) => ({
       id: template.id,
       title: template.title,
       subject:
         incomingSettings.proposalTemplates[index]?.subject?.trim() ||
-        currentSettings.proposalTemplates[index].subject,
+        currentSettings.proposalTemplates[index]?.subject ||
+        template.subject,
       body:
         incomingSettings.proposalTemplates[index]?.body ||
-        currentSettings.proposalTemplates[index].body,
+        currentSettings.proposalTemplates[index]?.body ||
+        template.body,
     })),
     automation: {
       intervalDays: Math.max(1, incomingSettings.automation.intervalDays || 2),
@@ -1443,10 +1512,15 @@ export const webApp = {
     }
 
     const contactScheduleTimes = Array.from({ length: targetContacts }, (_, index) =>
-      normalizeScheduleTime(clientInput.contactScheduleTimes[index], DEFAULT_SCHEDULE_TIMES[index]),
+      normalizeScheduleTime(clientInput.contactScheduleTimes[index], getDefaultScheduleTime(index)),
     )
 
     const database = loadDatabaseForUser(session.user.id)
+    database.settings.templates = ensureTemplateCount(
+      database.settings.templates,
+      targetContacts,
+      createDefaultTemplate,
+    )
     const createdAt = new Date().toISOString()
     const client: ClientRecord = {
       id: createId(),
@@ -1518,11 +1592,16 @@ export const webApp = {
     const followUpScheduleTimes = Array.from({ length: targetFollowUps }, (_, index) =>
       normalizeScheduleTime(
         proposalInput.followUpScheduleTimes[index],
-        DEFAULT_SCHEDULE_TIMES[index],
+        getDefaultScheduleTime(index),
       ),
     )
 
     const database = loadDatabaseForUser(session.user.id)
+    database.settings.proposalTemplates = ensureTemplateCount(
+      database.settings.proposalTemplates,
+      targetFollowUps,
+      createDefaultProposalTemplate,
+    )
     const createdAt = new Date().toISOString()
     const proposal: ProposalRecord = {
       id: createId(),

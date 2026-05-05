@@ -34,7 +34,8 @@ import { supabase } from './supabaseClient'
 import { webApp } from './webApp'
 import './App.css'
 
-const MAX_CONTACTS = 4
+const DEFAULT_TRY_COUNT = 4
+const MAX_SEQUENCE_TRIES = 100
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
 const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 
@@ -99,6 +100,13 @@ type SettingsFormState = {
   templates: EmailTemplate[]
 }
 
+type TemplateWorkflow = 'appointment' | 'proposal'
+
+type TemplateEditorState = {
+  index: number
+  workflow: TemplateWorkflow
+}
+
 type ProposalFormState = {
   clientName: string
   company: string
@@ -108,14 +116,95 @@ type ProposalFormState = {
   targetFollowUps: number
 }
 
+function getDefaultScheduleTime(index: number) {
+  return DEFAULT_SCHEDULE_TIMES[index % DEFAULT_SCHEDULE_TIMES.length] || '09:00'
+}
+
+function normalizeTryCount(value: number | string) {
+  const numericValue = typeof value === 'number' ? value : Number(value)
+
+  if (!Number.isFinite(numericValue)) {
+    return DEFAULT_TRY_COUNT
+  }
+
+  return Math.min(MAX_SEQUENCE_TRIES, Math.max(1, Math.trunc(numericValue)))
+}
+
+function createAppointmentTemplate(index: number): EmailTemplate {
+  const contactNumber = index + 1
+
+  return {
+    id: `contact-${contactNumber}`,
+    title: `Touchpoint ${contactNumber}`,
+    subject: `Follow-up ${contactNumber} of {{maxContacts}} for {{name}}`,
+    body: [
+      'Hi {{name}},',
+      '',
+      `I wanted to follow up on touchpoint ${contactNumber} of {{maxContacts}}.`,
+      'We are still available to answer questions and help you move forward.',
+      '',
+      'If you would like to continue the conversation, just reply and we will take it from there.',
+      '',
+      'Best,',
+      '{{fromName}}',
+    ].join('\n'),
+  }
+}
+
+function createProposalTemplate(index: number): EmailTemplate {
+  const contactNumber = index + 1
+
+  return {
+    id: `proposal-contact-${contactNumber}`,
+    title: `Proposal touchpoint ${contactNumber}`,
+    subject:
+      contactNumber > 1
+        ? `Following up on the proposal we sent - follow-up ${contactNumber}`
+        : 'Following up on the proposal we sent',
+    body: [
+      'Hi {{name}},',
+      '',
+      'I wanted to follow up on the proposal we sent.',
+      'Do you have any questions, or would you like to move forward with the next step?',
+      '',
+      'If it is helpful, reply here and we will take it from there.',
+      '',
+      'Best,',
+      '{{fromName}}',
+    ].join('\n'),
+  }
+}
+
+function ensureTemplateCount(
+  templates: EmailTemplate[],
+  targetCount: number,
+  workflow: TemplateWorkflow,
+) {
+  const desiredCount = normalizeTryCount(targetCount)
+  const createTemplate = workflow === 'appointment' ? createAppointmentTemplate : createProposalTemplate
+
+  if (templates.length >= desiredCount) {
+    return templates
+  }
+
+  return [
+    ...templates,
+    ...Array.from({ length: desiredCount - templates.length }, (_, index) =>
+      createTemplate(templates.length + index),
+    ),
+  ]
+}
+
 function createInitialClientForm(): ClientInput {
   return {
     company: '',
     email: '',
     name: '',
     notes: '',
-    targetContacts: 4,
-    contactScheduleTimes: [...DEFAULT_SCHEDULE_TIMES],
+    targetContacts: DEFAULT_TRY_COUNT,
+    contactScheduleTimes: Array.from({ length: DEFAULT_TRY_COUNT }, (_, index) =>
+      getDefaultScheduleTime(index),
+    ),
   }
 }
 
@@ -124,9 +213,11 @@ function createInitialProposalForm(): ProposalFormState {
     clientName: '',
     company: '',
     email: '',
-    followUpScheduleTimes: [...DEFAULT_SCHEDULE_TIMES],
+    followUpScheduleTimes: Array.from({ length: DEFAULT_TRY_COUNT }, (_, index) =>
+      getDefaultScheduleTime(index),
+    ),
     notes: '',
-    targetFollowUps: 4,
+    targetFollowUps: DEFAULT_TRY_COUNT,
   }
 }
 
@@ -347,8 +438,16 @@ function mapSettingsToForm(settings: SettingsState): SettingsFormState {
     fromEmail: settings.sender.fromEmail,
     fromName: settings.sender.fromName,
     intervalDays: String(settings.automation.intervalDays),
-    proposalTemplates: settings.proposalTemplates.map((template) => ({ ...template })),
-    templates: settings.templates.map((template) => ({ ...template })),
+    proposalTemplates: ensureTemplateCount(
+      settings.proposalTemplates.map((template) => ({ ...template })),
+      DEFAULT_TRY_COUNT,
+      'proposal',
+    ),
+    templates: ensureTemplateCount(
+      settings.templates.map((template) => ({ ...template })),
+      DEFAULT_TRY_COUNT,
+      'appointment',
+    ),
   }
 }
 
@@ -600,6 +699,9 @@ function App() {
   const [isProcessingProposalQueue, setIsProcessingProposalQueue] = useState(false)
   const [busyClientId, setBusyClientId] = useState<string | null>(null)
   const [busyProposalId, setBusyProposalId] = useState<string | null>(null)
+  const [appointmentTemplateChoice, setAppointmentTemplateChoice] = useState(0)
+  const [proposalTemplateChoice, setProposalTemplateChoice] = useState(0)
+  const [templateEditor, setTemplateEditor] = useState<TemplateEditorState | null>(null)
 
   function recordDiagnostic(context: string, error: unknown) {
     diagnosticIdRef.current += 1
@@ -991,10 +1093,12 @@ function App() {
     }
   }, [session, gmailConnection?.connected, appState?.stats.dueNow, appState?.proposals])
 
-  function updateClientSchedule(targetContacts: number) {
+  function updateClientSchedule(rawTargetContacts: number | string) {
+    const targetContacts = normalizeTryCount(rawTargetContacts)
+
     setClientForm((current) => {
       const nextSchedule = Array.from({ length: targetContacts }, (_, index) =>
-        current.contactScheduleTimes[index] || DEFAULT_SCHEDULE_TIMES[index],
+        current.contactScheduleTimes[index] || getDefaultScheduleTime(index),
       )
 
       return {
@@ -1003,12 +1107,23 @@ function App() {
         contactScheduleTimes: nextSchedule,
       }
     })
+
+    setSettingsForm((current) =>
+      current
+        ? {
+            ...current,
+            templates: ensureTemplateCount(current.templates, targetContacts, 'appointment'),
+          }
+        : current,
+    )
   }
 
-  function updateProposalSchedule(targetFollowUps: number) {
+  function updateProposalSchedule(rawTargetFollowUps: number | string) {
+    const targetFollowUps = normalizeTryCount(rawTargetFollowUps)
+
     setProposalForm((current) => {
       const nextSchedule = Array.from({ length: targetFollowUps }, (_, index) =>
-        current.followUpScheduleTimes[index] || DEFAULT_SCHEDULE_TIMES[index],
+        current.followUpScheduleTimes[index] || getDefaultScheduleTime(index),
       )
 
       return {
@@ -1017,6 +1132,19 @@ function App() {
         followUpScheduleTimes: nextSchedule,
       }
     })
+
+    setSettingsForm((current) =>
+      current
+        ? {
+            ...current,
+            proposalTemplates: ensureTemplateCount(
+              current.proposalTemplates,
+              targetFollowUps,
+              'proposal',
+            ),
+          }
+        : current,
+    )
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1295,9 +1423,31 @@ function App() {
     }
   }
 
+  function updateTemplateDraft(
+    workflow: TemplateWorkflow,
+    index: number,
+    field: 'body' | 'subject',
+    value: string,
+  ) {
+    setSettingsForm((current) => {
+      if (!current) {
+        return current
+      }
+
+      const key = workflow === 'appointment' ? 'templates' : 'proposalTemplates'
+
+      return {
+        ...current,
+        [key]: current[key].map((template, itemIndex) =>
+          itemIndex === index ? { ...template, [field]: value } : template,
+        ),
+      }
+    })
+  }
+
   async function saveSettingsChanges() {
     if (!settingsForm) {
-      return
+      return false
     }
 
     setIsSavingSettings(true)
@@ -1326,14 +1476,24 @@ function App() {
     try {
       const response = await webApp.saveSettings(payload)
       applyOperationResponse(response, true)
+      return true
     } catch (error) {
       setNotice({
         tone: 'error',
         message: toErrorMessage(error),
       })
       recordDiagnostic('Save settings', error)
+      return false
     } finally {
       setIsSavingSettings(false)
+    }
+  }
+
+  async function handleSaveTemplateModal() {
+    const saved = await saveSettingsChanges()
+
+    if (saved) {
+      setTemplateEditor(null)
     }
   }
 
@@ -2105,6 +2265,26 @@ function App() {
       value: gmailConnection?.connected ? gmailConnection.email || 'Connected' : 'Not connected',
     },
   ]
+  const activeAppointmentTemplateIndex = Math.min(
+    appointmentTemplateChoice,
+    Math.max(0, settingsForm.templates.length - 1),
+  )
+  const activeProposalTemplateIndex = Math.min(
+    proposalTemplateChoice,
+    Math.max(0, settingsForm.proposalTemplates.length - 1),
+  )
+  const activeTemplate =
+    templateEditor?.workflow === 'appointment'
+      ? settingsForm.templates[templateEditor.index]
+      : templateEditor?.workflow === 'proposal'
+        ? settingsForm.proposalTemplates[templateEditor.index]
+        : null
+  const activeTemplateTitle =
+    templateEditor?.workflow === 'appointment'
+      ? `Appointment touchpoint ${templateEditor.index + 1}`
+      : templateEditor?.workflow === 'proposal'
+        ? `Proposal follow-up ${templateEditor.index + 1}`
+        : ''
   const recentActivityFromClients: DashboardActivityItem[] = [
     ...appState.clients.flatMap((client) =>
       client.history.map((item) => ({
@@ -2265,6 +2445,94 @@ function App() {
         </header>
 
         {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
+
+        {activeTemplate && templateEditor ? (
+          <div className="template-modal-backdrop" role="presentation">
+            <section
+              aria-labelledby="template-modal-title"
+              aria-modal="true"
+              className="template-modal"
+              role="dialog"
+            >
+              <div className="template-modal-header">
+                <div>
+                  <span className="eyebrow">
+                    {templateEditor.workflow === 'appointment'
+                      ? 'Appointment follow-up'
+                      : 'Proposal follow-up'}
+                  </span>
+                  <h2 id="template-modal-title">{activeTemplateTitle}</h2>
+                </div>
+                <button
+                  aria-label="Close template editor"
+                  className="diagnostics-close"
+                  onClick={() => setTemplateEditor(null)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="template-modal-body">
+                <label className="field">
+                  <span>Subject line</span>
+                  <input
+                    onChange={(event) =>
+                      updateTemplateDraft(
+                        templateEditor.workflow,
+                        templateEditor.index,
+                        'subject',
+                        event.target.value,
+                      )
+                    }
+                    type="text"
+                    value={activeTemplate.subject}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Body</span>
+                  <textarea
+                    onChange={(event) =>
+                      updateTemplateDraft(
+                        templateEditor.workflow,
+                        templateEditor.index,
+                        'body',
+                        event.target.value,
+                      )
+                    }
+                    rows={12}
+                    value={activeTemplate.body}
+                  />
+                </label>
+              </div>
+
+              <div className="token-rack template-modal-tokens">
+                {templateTokens.map((token) => (
+                  <code key={token}>{token}</code>
+                ))}
+              </div>
+
+              <div className="template-modal-actions">
+                <button
+                  className="ghost-button"
+                  onClick={() => setTemplateEditor(null)}
+                  type="button"
+                >
+                  Close
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={isSavingSettings}
+                  onClick={() => void handleSaveTemplateModal()}
+                  type="button"
+                >
+                  {isSavingSettings ? 'Saving...' : 'Save template'}
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         <section
           className="dashboard-overview"
@@ -2539,21 +2807,16 @@ function App() {
 
                 <div className="composer-topline">
                   <label className="field compact-field">
-                    <span>Max touchpoints</span>
-                    <select
+                    <span>Number of tries</span>
+                    <input
                       className="select-input"
-                      onChange={(event) => updateProposalSchedule(Number(event.target.value))}
+                      inputMode="numeric"
+                      max={MAX_SEQUENCE_TRIES}
+                      min={1}
+                      onChange={(event) => updateProposalSchedule(event.target.value)}
+                      type="number"
                       value={proposalForm.targetFollowUps}
-                    >
-                      {Array.from({ length: MAX_CONTACTS }, (_, index) => {
-                        const option = index + 1
-                        return (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        )
-                      })}
-                    </select>
+                    />
                   </label>
 
                   <div className="composer-note">
@@ -2955,21 +3218,16 @@ function App() {
 
                 <div className="composer-topline">
                   <label className="field compact-field">
-                    <span>Max touchpoints</span>
-                    <select
+                    <span>Number of tries</span>
+                    <input
                       className="select-input"
-                      onChange={(event) => updateClientSchedule(Number(event.target.value))}
+                      inputMode="numeric"
+                      max={MAX_SEQUENCE_TRIES}
+                      min={1}
+                      onChange={(event) => updateClientSchedule(event.target.value)}
+                      type="number"
                       value={clientForm.targetContacts}
-                    >
-                      {Array.from({ length: MAX_CONTACTS }, (_, index) => {
-                        const option = index + 1
-                        return (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        )
-                      })}
-                    </select>
+                    />
                   </label>
 
                   <div className="composer-note">
@@ -3154,54 +3412,35 @@ function App() {
                 <span className="meta-pill">{settingsForm.templates.length} templates</span>
               </div>
 
-              {settingsForm.templates.map((template, index) => (
-                <div className="template-editor" key={template.id}>
-                  <div className="template-editor-head">
-                    <strong>{`Appointment touchpoint ${index + 1}`}</strong>
-                    <span>Email copy</span>
-                  </div>
+              <div className="template-picker-card">
+                <label className="field">
+                  <span>Select appointment template</span>
+                  <select
+                    className="select-input"
+                    onChange={(event) => setAppointmentTemplateChoice(Number(event.target.value))}
+                    value={activeAppointmentTemplateIndex}
+                  >
+                    {settingsForm.templates.map((template, index) => (
+                      <option key={template.id} value={index}>
+                        {`Template ${index + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-                  <label className="field">
-                    <span>Subject line</span>
-                    <input
-                      onChange={(event) =>
-                        setSettingsForm((current) =>
-                          current
-                            ? {
-                                ...current,
-                                templates: current.templates.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, subject: event.target.value } : item,
-                                ),
-                              }
-                            : current,
-                        )
-                      }
-                      type="text"
-                      value={template.subject}
-                    />
-                  </label>
-
-                  <label className="field">
-                    <span>Body</span>
-                    <textarea
-                      onChange={(event) =>
-                        setSettingsForm((current) =>
-                          current
-                            ? {
-                                ...current,
-                                templates: current.templates.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, body: event.target.value } : item,
-                                ),
-                              }
-                            : current,
-                        )
-                      }
-                      rows={7}
-                      value={template.body}
-                    />
-                  </label>
-                </div>
-              ))}
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    setTemplateEditor({
+                      workflow: 'appointment',
+                      index: activeAppointmentTemplateIndex,
+                    })
+                  }
+                  type="button"
+                >
+                  Edit selected template
+                </button>
+              </div>
             </div>
 
             <div className="template-group">
@@ -3213,54 +3452,35 @@ function App() {
                 <span className="meta-pill">{settingsForm.proposalTemplates.length} templates</span>
               </div>
 
-              {settingsForm.proposalTemplates.map((template, index) => (
-                <div className="template-editor" key={template.id}>
-                  <div className="template-editor-head">
-                    <strong>{`Proposal follow-up ${index + 1}`}</strong>
-                    <span>Email copy</span>
-                  </div>
+              <div className="template-picker-card">
+                <label className="field">
+                  <span>Select proposal template</span>
+                  <select
+                    className="select-input"
+                    onChange={(event) => setProposalTemplateChoice(Number(event.target.value))}
+                    value={activeProposalTemplateIndex}
+                  >
+                    {settingsForm.proposalTemplates.map((template, index) => (
+                      <option key={template.id} value={index}>
+                        {`Template ${index + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-                  <label className="field">
-                    <span>Subject line</span>
-                    <input
-                      onChange={(event) =>
-                        setSettingsForm((current) =>
-                          current
-                            ? {
-                                ...current,
-                                proposalTemplates: current.proposalTemplates.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, subject: event.target.value } : item,
-                                ),
-                              }
-                            : current,
-                        )
-                      }
-                      type="text"
-                      value={template.subject}
-                    />
-                  </label>
-
-                  <label className="field">
-                    <span>Body</span>
-                    <textarea
-                      onChange={(event) =>
-                        setSettingsForm((current) =>
-                          current
-                            ? {
-                                ...current,
-                                proposalTemplates: current.proposalTemplates.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, body: event.target.value } : item,
-                                ),
-                              }
-                            : current,
-                        )
-                      }
-                      rows={7}
-                      value={template.body}
-                    />
-                  </label>
-                </div>
-              ))}
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    setTemplateEditor({
+                      workflow: 'proposal',
+                      index: activeProposalTemplateIndex,
+                    })
+                  }
+                  type="button"
+                >
+                  Edit selected template
+                </button>
+              </div>
             </div>
           </div>
 
