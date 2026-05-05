@@ -97,6 +97,7 @@ export type SettingsState = {
     fromName: string
   }
   templates: EmailTemplate[]
+  proposalTemplates: EmailTemplate[]
   automation: {
     intervalDays: number
     autoOpenDraftOnCreate: boolean
@@ -147,6 +148,7 @@ export type SettingsInput = {
     fromName: string
   }
   templates: EmailTemplate[]
+  proposalTemplates: EmailTemplate[]
   automation: {
     intervalDays: number
     autoOpenDraftOnCreate: boolean

@@ -52,13 +52,12 @@ type DiagnosticEntry = {
 
 type AuthMode = 'forgot-password' | 'login' | 'register' | 'reset-password'
 type DashboardPageId =
-  | 'clients'
+  | 'appointments'
   | 'dashboard'
-  | 'email-drafts'
-  | 'follow-ups'
   | 'proposals'
   | 'settings'
   | 'templates'
+  | 'tracking'
 
 type AuthFormState = {
   email: string
@@ -67,23 +66,6 @@ type AuthFormState = {
 }
 
 type DashboardPriority = 'High' | 'Low' | 'Medium'
-
-type DashboardFollowUpCard = {
-  clientId: string | null
-  clientName: string
-  company: string
-  email: string
-  id: string
-  isMock: boolean
-  lastContactDate: string | null
-  nextFollowUpDate: string | null
-  priority: DashboardPriority
-  projectName: string
-  proposalAmount: number
-  proposalValue: string
-  status: string
-  summary: string
-}
 
 type DashboardActivityItem = {
   description: string
@@ -94,11 +76,26 @@ type DashboardActivityItem = {
   tone: 'danger' | 'info' | 'success' | 'warning'
 }
 
+type TrackingRecord = {
+  company: string
+  email: string
+  id: string
+  lastEmailAt: string | null
+  name: string
+  nextEmailAt: string | null
+  notes: string
+  sentCount: number
+  status: ClientStatus | ProposalStatus
+  targetCount: number
+  type: 'Appointment' | 'Proposal'
+}
+
 type SettingsFormState = {
   autoOpenDraftOnCreate: boolean
   fromEmail: string
   fromName: string
   intervalDays: string
+  proposalTemplates: EmailTemplate[]
   templates: EmailTemplate[]
 }
 
@@ -350,6 +347,7 @@ function mapSettingsToForm(settings: SettingsState): SettingsFormState {
     fromEmail: settings.sender.fromEmail,
     fromName: settings.sender.fromName,
     intervalDays: String(settings.automation.intervalDays),
+    proposalTemplates: settings.proposalTemplates.map((template) => ({ ...template })),
     templates: settings.templates.map((template) => ({ ...template })),
   }
 }
@@ -430,10 +428,9 @@ const templateTokens = [
 
 const dashboardNavItems: Array<{ href: DashboardPageId; label: string }> = [
   { href: 'dashboard', label: 'Dashboard' },
-  { href: 'clients', label: 'Clients' },
+  { href: 'appointments', label: 'Appointments' },
   { href: 'proposals', label: 'Proposals' },
-  { href: 'follow-ups', label: 'Follow-Ups' },
-  { href: 'email-drafts', label: 'Email Drafts' },
+  { href: 'tracking', label: 'Tracking' },
   { href: 'templates', label: 'Templates' },
   { href: 'settings', label: 'Settings' },
 ]
@@ -445,17 +442,31 @@ function getInitialDashboardPage(): DashboardPageId {
     return 'dashboard'
   }
 
-  const hashPage = window.location.hash.replace('#', '') as DashboardPageId
+  const rawHashPage = window.location.hash.replace('#', '')
+  const hashPage =
+    rawHashPage === 'clients'
+      ? 'appointments'
+      : rawHashPage === 'follow-ups'
+        ? 'tracking'
+        : (rawHashPage as DashboardPageId)
   return dashboardPageIds.has(hashPage) ? hashPage : 'dashboard'
 }
 
 function getDashboardPageForSection(sectionId: string): DashboardPageId {
   if (sectionId === 'new-client' || sectionId.startsWith('client-record-')) {
-    return 'clients'
+    return 'appointments'
   }
 
   if (dashboardPageIds.has(sectionId as DashboardPageId)) {
     return sectionId as DashboardPageId
+  }
+
+  if (sectionId === 'clients') {
+    return 'appointments'
+  }
+
+  if (sectionId === 'follow-ups') {
+    return 'tracking'
   }
 
   return 'dashboard'
@@ -526,94 +537,6 @@ function createRelativeIsoDate(days: number, hours = 0) {
   date.setDate(date.getDate() + days)
   date.setHours(date.getHours() + hours, 0, 0, 0)
   return date.toISOString()
-}
-
-function getClientPriority(client: ClientRecord): DashboardPriority {
-  if (client.lastError || isOverdue(client.nextContactAt)) {
-    return 'High'
-  }
-
-  if (isDueToday(client.nextContactAt) || client.sentContacts >= client.targetContacts - 1) {
-    return 'Medium'
-  }
-
-  return 'Low'
-}
-
-function getClientProjectName(client: ClientRecord) {
-  return client.company ? `${client.company} follow-up` : 'Client follow-up sequence'
-}
-
-function createDashboardCardFromClient(client: ClientRecord): DashboardFollowUpCard {
-  return {
-    clientId: client.id,
-    clientName: client.name,
-    company: client.company || 'No company added',
-    email: client.email,
-    id: client.id,
-    isMock: false,
-    lastContactDate: client.lastContactAt,
-    nextFollowUpDate: client.nextContactAt,
-    priority: getClientPriority(client),
-    projectName: getClientProjectName(client),
-    proposalAmount: 0,
-    proposalValue: 'Not tracked yet',
-    status: getClientStatusLabel(client.status),
-    summary: client.notes || `${client.sentContacts}/${client.targetContacts} touchpoints completed`,
-  }
-}
-
-function createMockFollowUpCards(): DashboardFollowUpCard[] {
-  return [
-    {
-      clientId: null,
-      clientName: 'Acme Roofing',
-      company: 'Acme Roofing',
-      email: 'estimating@acmeroofing.example',
-      id: 'mock-acme-roofing',
-      isMock: true,
-      lastContactDate: createRelativeIsoDate(-2),
-      nextFollowUpDate: createRelativeIsoDate(0, 1),
-      priority: 'High',
-      projectName: 'Commercial roof replacement',
-      proposalAmount: 24500,
-      proposalValue: '$24,500',
-      status: 'Proposal sent',
-      summary: 'Decision maker asked for financing options before approval.',
-    },
-    {
-      clientId: null,
-      clientName: 'Northside Remodel',
-      company: 'Northside Remodel',
-      email: 'ops@northside.example',
-      id: 'mock-northside-remodel',
-      isMock: true,
-      lastContactDate: createRelativeIsoDate(-1),
-      nextFollowUpDate: createRelativeIsoDate(0, 3),
-      priority: 'Medium',
-      projectName: 'Kitchen renovation estimate',
-      proposalAmount: 18300,
-      proposalValue: '$18,300',
-      status: 'Pending review',
-      summary: 'Follow up after the site walkthrough and revised scope.',
-    },
-    {
-      clientId: null,
-      clientName: 'Valley HVAC',
-      company: 'Valley HVAC',
-      email: 'service@valleyhvac.example',
-      id: 'mock-valley-hvac',
-      isMock: true,
-      lastContactDate: createRelativeIsoDate(-4),
-      nextFollowUpDate: createRelativeIsoDate(0, 5),
-      priority: 'Low',
-      projectName: 'Maintenance contract proposal',
-      proposalAmount: 12800,
-      proposalValue: '$12,800',
-      status: 'Appointment scheduled',
-      summary: 'Confirm maintenance plan details before sending final proposal.',
-    },
-  ]
 }
 
 function createMockActivityItems(): DashboardActivityItem[] {
@@ -1389,6 +1312,11 @@ function App() {
         subject: template.subject.trim(),
         body: template.body,
       })),
+      proposalTemplates: settingsForm.proposalTemplates.map((template) => ({
+        ...template,
+        subject: template.subject.trim(),
+        body: template.body,
+      })),
       automation: {
         intervalDays: Math.max(1, Number(settingsForm.intervalDays) || 2),
         autoOpenDraftOnCreate: settingsForm.autoOpenDraftOnCreate,
@@ -2048,7 +1976,7 @@ function App() {
           <div className="loading-copy">
             <span className="eyebrow">Hessa Follow Up</span>
             <h1>Loading your workspace...</h1>
-            <p>Preparing clients, schedules, and email templates.</p>
+            <p>Preparing appointments, proposals, schedules, and email templates.</p>
           </div>
         </section>
       </main>
@@ -2062,6 +1990,7 @@ function App() {
   const dueTodayClients = sortedActiveClients.filter((client) => isDueToday(client.nextContactAt))
   const overdueClients = sortedActiveClients.filter((client) => isOverdue(client.nextContactAt))
   const openProposals = appState.proposals.filter(isOpenProposal)
+  const activeWorkflowCount = activeClients.length + openProposals.length
   const finishedProposals = appState.proposals.filter((proposal) => proposal.status === 'finished')
   const pausedProposals = appState.proposals.filter((proposal) => proposal.status === 'canceled')
   const sortedOpenProposals = [...openProposals].sort((first, second) =>
@@ -2074,34 +2003,8 @@ function App() {
     isOverdue(proposal.nextFollowUpAt),
   )
   const dueProposalFollowUps = sortedOpenProposals.filter(isProposalFollowUpDue)
-  const featuredClients =
-    dueTodayClients.length || overdueClients.length
-      ? [...overdueClients, ...dueTodayClients]
-      : sortedActiveClients.slice(0, 4)
-  const mockFollowUpCards = createMockFollowUpCards()
   const usingMockDashboardData = appState.clients.length === 0 && appState.proposals.length === 0
-  const dashboardCards = usingMockDashboardData
-    ? mockFollowUpCards
-    : featuredClients.map(createDashboardCardFromClient)
   const searchQuery = dashboardSearch.trim().toLowerCase()
-  const filteredDashboardCards = dashboardCards.filter((card) => {
-    if (!searchQuery) {
-      return true
-    }
-
-    return [
-      card.clientName,
-      card.company,
-      card.email,
-      card.priority,
-      card.projectName,
-      card.status,
-      card.summary,
-    ]
-      .join(' ')
-      .toLowerCase()
-      .includes(searchQuery)
-  })
   const filteredDirectoryClients = appState.clients.filter((client) => {
     if (!searchQuery) {
       return true
@@ -2128,6 +2031,80 @@ function App() {
       .toLowerCase()
       .includes(searchQuery)
   })
+  const trackingRecords: TrackingRecord[] = [
+    ...appState.clients.map((client) => ({
+      company: client.company,
+      email: client.email,
+      id: `appointment-${client.id}`,
+      lastEmailAt: client.lastContactAt,
+      name: client.name,
+      nextEmailAt: client.nextContactAt,
+      notes: client.notes,
+      sentCount: client.sentContacts,
+      status: client.status,
+      targetCount: client.targetContacts,
+      type: 'Appointment' as const,
+    })),
+    ...appState.proposals.map((proposal) => ({
+      company: proposal.company,
+      email: proposal.email,
+      id: `proposal-${proposal.id}`,
+      lastEmailAt: proposal.lastFollowUpAt,
+      name: proposal.clientName,
+      nextEmailAt: proposal.nextFollowUpAt,
+      notes: proposal.notes,
+      sentCount: proposal.sentFollowUps,
+      status: proposal.status,
+      targetCount: proposal.targetFollowUps,
+      type: 'Proposal' as const,
+    })),
+  ].sort((first, second) => compareNullableDates(first.nextEmailAt, second.nextEmailAt))
+  const filteredTrackingRecords = trackingRecords.filter((record) => {
+    if (!searchQuery) {
+      return true
+    }
+
+    return [
+      record.company,
+      record.email,
+      record.name,
+      record.notes,
+      record.status,
+      record.type,
+      `${record.sentCount}/${record.targetCount}`,
+    ]
+      .join(' ')
+      .toLowerCase()
+      .includes(searchQuery)
+  })
+  const totalEmailsSent =
+    appState.clients.reduce((total, client) => total + client.sentContacts, 0) +
+    appState.proposals.reduce((total, proposal) => total + proposal.sentFollowUps, 0)
+  const overviewCards = [
+    {
+      count: appState.clients.length,
+      label: 'Appointments',
+      value: `${dueTodayClients.length + overdueClients.length} need email today`,
+    },
+    {
+      count: appState.proposals.length,
+      label: 'Proposals',
+      tone: 'warning',
+      value: `${dueProposalFollowUps.length} proposal follow-ups due`,
+    },
+    {
+      count: totalEmailsSent,
+      label: 'Emails sent',
+      tone: 'success',
+      value: 'Appointments and proposals combined',
+    },
+    {
+      count: gmailConnection?.connected ? 'On' : 'Drafts',
+      label: 'Gmail sending',
+      tone: gmailConnection?.connected ? 'success' : 'info',
+      value: gmailConnection?.connected ? gmailConnection.email || 'Connected' : 'Not connected',
+    },
+  ]
   const recentActivityFromClients: DashboardActivityItem[] = [
     ...appState.clients.flatMap((client) =>
       client.history.map((item) => ({
@@ -2161,13 +2138,13 @@ function App() {
     : createMockActivityItems()
   const kpiCards = [
     {
-      helper: usingMockDashboardData ? 'Demo queue until your first client is saved' : 'Scheduled for today',
-      label: 'Follow-ups due today',
+      helper: usingMockDashboardData ? 'Demo queue until your first appointment is saved' : 'Scheduled for today',
+      label: 'Appointment emails due',
       value: String(usingMockDashboardData ? 6 : dueTodayClients.length),
     },
     {
       helper: usingMockDashboardData ? 'Demo overdue opportunities' : 'Need attention before they go cold',
-      label: 'Overdue follow-ups',
+      label: 'Overdue appointments',
       tone: 'danger',
       value: String(usingMockDashboardData ? 2 : overdueClients.length),
     },
@@ -2245,11 +2222,11 @@ function App() {
 
         <div className="sidebar-summary">
           <span>Workspace health</span>
-          <strong>{activeClients.length || (usingMockDashboardData ? 7 : 0)} active</strong>
+          <strong>{activeWorkflowCount || (usingMockDashboardData ? 7 : 0)} active</strong>
           <small>
             {usingMockDashboardData
-              ? 'Demo data is visible until you save your first client.'
-              : `${appState.stats.total} total clients tracked.`}
+              ? 'Demo data is visible until you save your first appointment.'
+              : `${appState.clients.length} appointments and ${appState.proposals.length} proposals tracked.`}
           </small>
         </div>
       </aside>
@@ -2260,7 +2237,7 @@ function App() {
             <span>Search</span>
             <input
               onChange={(event) => setDashboardSearch(event.target.value)}
-              placeholder="Search clients, proposals, follow-ups..."
+              placeholder="Search appointments, proposals, tracking..."
               type="search"
               value={dashboardSearch}
             />
@@ -2271,7 +2248,7 @@ function App() {
             onClick={() => scrollToDashboardSection('new-client')}
             type="button"
           >
-            New Client
+            New Appointment
           </button>
 
           <div className="dashboard-user-card">
@@ -2297,15 +2274,15 @@ function App() {
           <div className="dashboard-heading">
             <div>
               <span className="eyebrow">Hessa Enterprises</span>
-              <h1>Follow-up dashboard</h1>
+              <h1>Workspace dashboard</h1>
               <p>
-                Track client next steps, proposal momentum, and ready-to-open email drafts from one
-                focused workspace.
+                See appointment follow-ups, proposal follow-ups, sent email counts, and Gmail
+                sending health from one focused workspace.
               </p>
             </div>
 
             {usingMockDashboardData ? (
-              <span className="demo-data-badge">Demo data shown until first client</span>
+              <span className="demo-data-badge">Demo data shown until first appointment</span>
             ) : (
               <span className="demo-data-badge live-data-badge">Live workspace data</span>
             )}
@@ -2320,136 +2297,28 @@ function App() {
               </article>
             ))}
           </div>
+
+          <div className="dashboard-overview-grid">
+            {overviewCards.map((card) => (
+              <article className={`pipeline-stage pipeline-${card.tone || 'info'}`} key={card.label}>
+                <span>{card.label}</span>
+                <strong>{card.count}</strong>
+                <small>{card.value}</small>
+              </article>
+            ))}
+          </div>
         </section>
 
         <section
-          className={`dashboard-primary-grid ${
-            activeDashboardPage === 'dashboard' || activeDashboardPage === 'follow-ups'
-              ? 'dashboard-single-grid'
-              : ''
-          }`}
-          hidden={activeDashboardPage !== 'dashboard' && activeDashboardPage !== 'follow-ups'}
+          className="dashboard-primary-grid dashboard-single-grid"
+          hidden={activeDashboardPage !== 'dashboard'}
         >
-          <article
-            className="dashboard-card followup-dashboard-card"
-            hidden={activeDashboardPage !== 'follow-ups'}
-            id="follow-ups"
-          >
-            <div className="dashboard-card-header">
-              <div>
-                <span className="eyebrow">Follow-ups</span>
-                <h2>Follow-ups due today</h2>
-              </div>
-              <button
-                className="secondary-button compact-action"
-                disabled={isProcessingQueue || usingMockDashboardData}
-                onClick={() => void handleProcessQueue()}
-                type="button"
-              >
-                {isProcessingQueue ? 'Opening...' : 'Open next draft'}
-              </button>
-            </div>
-
-            {filteredDashboardCards.length === 0 ? (
-              <div className="dashboard-empty-state">
-                <h3>No follow-ups match this view</h3>
-                <p>Try clearing search or create a new client sequence.</p>
-              </div>
-            ) : (
-              <div className="followup-card-list">
-                {filteredDashboardCards.map((card) => {
-                  const isBusy = card.clientId ? busyClientId === card.clientId : false
-
-                  return (
-                    <article className="followup-client-card" key={card.id}>
-                      <div className="followup-client-top">
-                        <div>
-                          <div className="identity-row">
-                            <span className={`priority-badge priority-${card.priority.toLowerCase()}`}>
-                              {card.priority} priority
-                            </span>
-                            {card.isMock ? <span className="mock-data-pill">UI demo</span> : null}
-                          </div>
-                          <h3>{card.clientName}</h3>
-                          <p>{card.projectName}</p>
-                        </div>
-                        <strong className="proposal-value">{card.proposalValue}</strong>
-                      </div>
-
-                      <div className="followup-detail-grid">
-                        <div>
-                          <span>Current status</span>
-                          <strong>{card.status}</strong>
-                        </div>
-                        <div>
-                          <span>Last contact</span>
-                          <strong>{formatDateTime(card.lastContactDate)}</strong>
-                        </div>
-                        <div>
-                          <span>Next follow-up</span>
-                          <strong>{formatDateTime(card.nextFollowUpDate)}</strong>
-                        </div>
-                      </div>
-
-                      <p className="followup-summary">{card.summary}</p>
-
-                      <div className="followup-action-row">
-                        <button
-                          className="primary-button"
-                          disabled={card.isMock || isBusy || !card.clientId}
-                          onClick={() => {
-                            if (card.clientId) {
-                              void handleSendClient(card.clientId)
-                            }
-                          }}
-                          type="button"
-                        >
-                          {isBusy
-                            ? gmailConnection?.connected
-                              ? 'Sending...'
-                              : 'Opening...'
-                            : gmailConnection?.connected
-                              ? 'Send Email'
-                              : 'Open Draft'}
-                        </button>
-                        <button
-                          className="ghost-button"
-                          onClick={() =>
-                            setNotice({
-                              tone: 'info',
-                              message:
-                                'Open Draft records the current follow-up. Manual Mark Done can be connected when proposal tracking has database fields.',
-                            })
-                          }
-                          title="Manual completion will be available once proposal tracking has a database field."
-                          type="button"
-                        >
-                          Mark Done
-                        </button>
-                        <button
-                          className="secondary-button"
-                          disabled={card.isMock}
-                          onClick={() =>
-                            scrollToDashboardSection(card.clientId ? `client-record-${card.clientId}` : 'clients')
-                          }
-                          type="button"
-                        >
-                          View Client
-                        </button>
-                      </div>
-                    </article>
-                  )
-                })}
-              </div>
-            )}
-          </article>
-
-          <div className="dashboard-side-stack" hidden={activeDashboardPage !== 'dashboard'}>
+          <div className="dashboard-side-stack">
             <article className="dashboard-card">
               <div className="dashboard-card-header">
                 <div>
                   <span className="eyebrow">Pipeline</span>
-                  <h2>Proposal pipeline</h2>
+                  <h2>Proposal overview</h2>
                 </div>
                 {usingMockDashboardData ? <span className="mock-data-pill">Demo</span> : null}
               </div>
@@ -2503,6 +2372,81 @@ function App() {
               </div>
             </article>
           </div>
+        </section>
+
+        <section
+          className="dashboard-card followup-dashboard-card"
+          hidden={activeDashboardPage !== 'tracking'}
+          id="tracking"
+        >
+          <div className="dashboard-card-header">
+            <div>
+              <span className="eyebrow">Tracking</span>
+              <h2>Email tracking</h2>
+            </div>
+            <span className="section-count">{filteredTrackingRecords.length}</span>
+          </div>
+
+          <p className="dashboard-card-copy">
+            See every appointment and proposal follow-up sequence in one place, including how many
+            emails have already been sent and what is scheduled next.
+          </p>
+
+          {filteredTrackingRecords.length === 0 ? (
+            <div className="dashboard-empty-state">
+              <h3>No tracking records yet</h3>
+              <p>Create an appointment or proposal follow-up to start tracking sent emails.</p>
+            </div>
+          ) : (
+            <div className="followup-card-list">
+              {filteredTrackingRecords.map((record) => (
+                <article className="followup-client-card" key={record.id}>
+                  <div className="followup-client-top">
+                    <div>
+                      <div className="identity-row">
+                        <span className={`status-pill pill-${record.status}`}>
+                          {getClientStatusLabel(record.status)}
+                        </span>
+                        <span className="meta-pill">{record.type}</span>
+                      </div>
+                      <h3>{record.name}</h3>
+                      <p>
+                        {record.company || 'No company'} · {record.email}
+                      </p>
+                    </div>
+                    <strong className="proposal-value">
+                      {record.sentCount}/{record.targetCount}
+                    </strong>
+                  </div>
+
+                  <div className="followup-detail-grid tracking-detail-grid">
+                    <div>
+                      <span>Workflow</span>
+                      <strong>{record.type}</strong>
+                    </div>
+                    <div>
+                      <span>Emails sent</span>
+                      <strong>
+                        {record.sentCount}/{record.targetCount}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Last email</span>
+                      <strong>{formatDateTime(record.lastEmailAt)}</strong>
+                    </div>
+                    <div>
+                      <span>Next email</span>
+                      <strong>{formatDateTime(record.nextEmailAt)}</strong>
+                    </div>
+                  </div>
+
+                  <p className="followup-summary">
+                    {record.notes || `${record.type} follow-up sequence`}
+                  </p>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
 
         <section
@@ -2792,61 +2736,8 @@ function App() {
 
         <section
           className="dashboard-operations-grid dashboard-single-grid"
-          hidden={activeDashboardPage !== 'email-drafts' && activeDashboardPage !== 'settings'}
+          hidden={activeDashboardPage !== 'settings'}
         >
-          <article
-            className="dashboard-card"
-            hidden={activeDashboardPage !== 'email-drafts'}
-            id="email-drafts"
-          >
-            <div className="dashboard-card-header">
-              <div>
-                <span className="eyebrow">Email drafts</span>
-                <h2>{gmailConnection?.connected ? 'Gmail sending' : 'Draft queue'}</h2>
-              </div>
-              <span className={`section-count ${gmailConnection?.connected ? 'gmail-connected-count' : ''}`}>
-                {gmailConnection?.connected ? 'Gmail' : appState.stats.dueNow + dueProposalFollowUps.length}
-              </span>
-            </div>
-
-            <p className="dashboard-card-copy">
-              {gmailConnection?.connected
-                ? `Connected as ${gmailConnection.email}. Client and proposal follow-ups send through Gmail API from that account.`
-                : 'Email sending stays exactly as before: the app opens prepared `mailto:` drafts for client and proposal follow-ups until Gmail is connected.'}
-            </p>
-
-            <div className="email-action-stack">
-              <button
-                className="primary-button full-width"
-                disabled={isProcessingQueue}
-                onClick={() => void handleProcessQueue()}
-                type="button"
-              >
-                {isProcessingQueue
-                  ? gmailConnection?.connected
-                    ? 'Sending client follow-up...'
-                    : 'Opening client draft...'
-                  : gmailConnection?.connected
-                    ? 'Send next client email'
-                    : 'Open next client draft'}
-              </button>
-              <button
-                className="secondary-button full-width"
-                disabled={isProcessingProposalQueue}
-                onClick={() => void handleProcessProposalQueue()}
-                type="button"
-              >
-                {isProcessingProposalQueue
-                  ? gmailConnection?.connected
-                    ? 'Sending proposal follow-up...'
-                    : 'Opening proposal draft...'
-                  : gmailConnection?.connected
-                    ? 'Send next proposal email'
-                    : 'Open next proposal draft'}
-              </button>
-            </div>
-          </article>
-
           <article
             className="dashboard-card"
             hidden={activeDashboardPage !== 'settings'}
@@ -2865,8 +2756,8 @@ function App() {
                 <h3>{gmailConnection?.connected ? 'Gmail is connected' : 'Connect Gmail'}</h3>
                 <p>
                   {gmailConnection?.connected
-                    ? `Emails will be sent from ${gmailConnection.email}. Due client and proposal follow-ups send automatically while this dashboard is open.`
-                    : 'Let users authorize Gmail once so client and proposal follow-up emails can send automatically from their own account.'}
+                    ? `Emails will be sent from ${gmailConnection.email}. Due appointment and proposal follow-ups send automatically while this dashboard is open.`
+                    : 'Let users authorize Gmail once so appointment and proposal follow-up emails can send automatically from their own account.'}
                 </p>
               </div>
 
@@ -2970,13 +2861,33 @@ function App() {
           </article>
         </section>
 
-        <section className="dashboard-card" hidden={activeDashboardPage !== 'clients'} id="clients">
+        <section
+          className="dashboard-card"
+          hidden={activeDashboardPage !== 'appointments'}
+          id="appointments"
+        >
           <div className="dashboard-card-header">
             <div>
-              <span className="eyebrow">Clients</span>
-              <h2>Client workspace</h2>
+              <span className="eyebrow">Appointments</span>
+              <h2>Appointment workspace</h2>
             </div>
-            <span className="section-count">{filteredDirectoryClients.length}</span>
+            <div className="proposal-header-actions">
+              <span className="section-count">{filteredDirectoryClients.length}</span>
+              <button
+                className="secondary-button compact-action"
+                disabled={isProcessingQueue || appState.clients.length === 0}
+                onClick={() => void handleProcessQueue()}
+                type="button"
+              >
+                {isProcessingQueue
+                  ? gmailConnection?.connected
+                    ? 'Sending...'
+                    : 'Opening...'
+                  : gmailConnection?.connected
+                    ? 'Send due appointment email'
+                    : 'Open due appointment draft'}
+              </button>
+            </div>
           </div>
 
           <div className="client-workspace-grid">
@@ -2985,13 +2896,13 @@ function App() {
                 <span className="section-index">01</span>
                 <div>
                   <span className="eyebrow">Intake</span>
-                  <h3>Create a new sequence</h3>
+                  <h3>Create appointment follow-up</h3>
                 </div>
               </div>
 
               <form className="stack-form" onSubmit={handleClientSubmit}>
                 <label className="field">
-                  <span>Client name</span>
+                  <span>Appointment contact</span>
                   <input
                     onChange={(event) =>
                       setClientForm((current) => ({ ...current, name: event.target.value }))
@@ -3090,7 +3001,7 @@ function App() {
                 </div>
 
                 <button className="primary-button full-width" disabled={isSubmittingClient} type="submit">
-                  {isSubmittingClient ? 'Saving client...' : 'Save client'}
+                  {isSubmittingClient ? 'Saving appointment...' : 'Save appointment'}
                 </button>
               </form>
             </article>
@@ -3098,8 +3009,8 @@ function App() {
             <div className="client-directory-list">
               {filteredDirectoryClients.length === 0 ? (
                 <article className="dashboard-empty-state">
-                  <h3>No saved clients yet</h3>
-                  <p>Create your first client sequence to replace the demo cards above.</p>
+                  <h3>No saved appointments yet</h3>
+                  <p>Create your first appointment follow-up sequence to start tracking emails.</p>
                 </article>
               ) : (
                 filteredDirectoryClients.map((client) => {
@@ -3125,7 +3036,7 @@ function App() {
                         </div>
 
                         <div className="next-window">
-                          <span>{isPaused ? 'Paused on' : 'Next draft'}</span>
+                          <span>{isPaused ? 'Paused on' : 'Next email'}</span>
                           <strong>{formatRelativeDue(isPaused ? client.canceledAt : client.nextContactAt)}</strong>
                           <small>{formatDateTime(isPaused ? client.canceledAt : client.nextContactAt)}</small>
                         </div>
@@ -3150,7 +3061,7 @@ function App() {
                           <strong>{formatDateTime(client.createdAt)}</strong>
                         </div>
                         <div className="meta-card">
-                          <span className="meta-label">Completed</span>
+                          <span className="meta-label">Emails sent</span>
                           <strong>
                             {client.sentContacts}/{client.targetContacts}
                           </strong>
@@ -3183,7 +3094,7 @@ function App() {
                               onClick={() => void handleToggleClient(client)}
                               type="button"
                             >
-                              Pause client
+                              Pause appointment
                             </button>
                           </>
                         ) : null}
@@ -3195,7 +3106,7 @@ function App() {
                             onClick={() => void handleToggleClient(client)}
                             type="button"
                           >
-                            {isBusy ? 'Rescheduling...' : 'Resume client'}
+                            {isBusy ? 'Rescheduling...' : 'Resume appointment'}
                           </button>
                         ) : null}
 
@@ -3206,7 +3117,7 @@ function App() {
                             onClick={() => void handleDeleteClient(client)}
                             type="button"
                           >
-                            {isBusy ? 'Deleting...' : 'Delete client'}
+                            {isBusy ? 'Deleting...' : 'Delete appointment'}
                           </button>
                         ) : null}
                       </div>
@@ -3226,60 +3137,131 @@ function App() {
           <div className="dashboard-card-header">
             <div>
               <span className="eyebrow">Templates</span>
-              <h2>Email copy by touchpoint</h2>
+              <h2>Email copy by workflow</h2>
             </div>
-            <span className="section-count">{settingsForm.templates.length}</span>
+            <span className="section-count">
+              {settingsForm.templates.length + settingsForm.proposalTemplates.length}
+            </span>
           </div>
 
           <div className="template-stack">
-            {settingsForm.templates.map((template, index) => (
-              <div className="template-editor" key={template.id}>
-                <div className="template-editor-head">
-                  <strong>{`Touchpoint ${index + 1}`}</strong>
-                  <span>Email copy</span>
+            <div className="template-group">
+              <div className="template-group-heading">
+                <div>
+                  <span className="eyebrow">Appointment follow-ups</span>
+                  <h3>Appointment email sequence</h3>
                 </div>
-
-                <label className="field">
-                  <span>Subject line</span>
-                  <input
-                    onChange={(event) =>
-                      setSettingsForm((current) =>
-                        current
-                          ? {
-                              ...current,
-                              templates: current.templates.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, subject: event.target.value } : item,
-                              ),
-                            }
-                          : current,
-                      )
-                    }
-                    type="text"
-                    value={template.subject}
-                  />
-                </label>
-
-                <label className="field">
-                  <span>Body</span>
-                  <textarea
-                    onChange={(event) =>
-                      setSettingsForm((current) =>
-                        current
-                          ? {
-                              ...current,
-                              templates: current.templates.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, body: event.target.value } : item,
-                              ),
-                            }
-                          : current,
-                      )
-                    }
-                    rows={7}
-                    value={template.body}
-                  />
-                </label>
+                <span className="meta-pill">{settingsForm.templates.length} templates</span>
               </div>
-            ))}
+
+              {settingsForm.templates.map((template, index) => (
+                <div className="template-editor" key={template.id}>
+                  <div className="template-editor-head">
+                    <strong>{`Appointment touchpoint ${index + 1}`}</strong>
+                    <span>Email copy</span>
+                  </div>
+
+                  <label className="field">
+                    <span>Subject line</span>
+                    <input
+                      onChange={(event) =>
+                        setSettingsForm((current) =>
+                          current
+                            ? {
+                                ...current,
+                                templates: current.templates.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, subject: event.target.value } : item,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                      type="text"
+                      value={template.subject}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Body</span>
+                    <textarea
+                      onChange={(event) =>
+                        setSettingsForm((current) =>
+                          current
+                            ? {
+                                ...current,
+                                templates: current.templates.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, body: event.target.value } : item,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                      rows={7}
+                      value={template.body}
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+
+            <div className="template-group">
+              <div className="template-group-heading">
+                <div>
+                  <span className="eyebrow">Proposal follow-ups</span>
+                  <h3>Proposal email sequence</h3>
+                </div>
+                <span className="meta-pill">{settingsForm.proposalTemplates.length} templates</span>
+              </div>
+
+              {settingsForm.proposalTemplates.map((template, index) => (
+                <div className="template-editor" key={template.id}>
+                  <div className="template-editor-head">
+                    <strong>{`Proposal follow-up ${index + 1}`}</strong>
+                    <span>Email copy</span>
+                  </div>
+
+                  <label className="field">
+                    <span>Subject line</span>
+                    <input
+                      onChange={(event) =>
+                        setSettingsForm((current) =>
+                          current
+                            ? {
+                                ...current,
+                                proposalTemplates: current.proposalTemplates.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, subject: event.target.value } : item,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                      type="text"
+                      value={template.subject}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>Body</span>
+                    <textarea
+                      onChange={(event) =>
+                        setSettingsForm((current) =>
+                          current
+                            ? {
+                                ...current,
+                                proposalTemplates: current.proposalTemplates.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, body: event.target.value } : item,
+                                ),
+                              }
+                            : current,
+                        )
+                      }
+                      rows={7}
+                      value={template.body}
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="token-rack">

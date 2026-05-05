@@ -78,6 +78,32 @@ function createDefaultTemplates() {
   })
 }
 
+function createDefaultProposalTemplates() {
+  return Array.from({ length: MAX_CONTACTS }, (_, index) => {
+    const contactNumber = index + 1
+
+    return {
+      id: `proposal-contact-${contactNumber}`,
+      title: `Proposal touchpoint ${contactNumber}`,
+      subject:
+        contactNumber > 1
+          ? `Following up on the proposal we sent - follow-up ${contactNumber}`
+          : 'Following up on the proposal we sent',
+      body: [
+        'Hi {{name}},',
+        '',
+        'I wanted to follow up on the proposal we sent.',
+        'Do you have any questions, or would you like to move forward with the next step?',
+        '',
+        'If it is helpful, reply here and we will take it from there.',
+        '',
+        'Best,',
+        '{{fromName}}',
+      ].join('\n'),
+    }
+  })
+}
+
 function createLegacyDefaultTemplates() {
   return Array.from({ length: MAX_CONTACTS }, (_, index) => {
     const contactNumber = index + 1
@@ -99,6 +125,13 @@ function createLegacyDefaultTemplates() {
   })
 }
 
+function createLegacyDefaultProposalTemplates() {
+  return createDefaultProposalTemplates().map((template) => ({
+    subject: template.subject,
+    body: template.body,
+  }))
+}
+
 const defaultDatabase: Database = Object.freeze({
   version: 1,
   settings: {
@@ -107,6 +140,7 @@ const defaultDatabase: Database = Object.freeze({
       fromName: 'Hessa Enterprises',
     },
     templates: createDefaultTemplates(),
+    proposalTemplates: createDefaultProposalTemplates(),
     automation: {
       intervalDays: 2,
       autoOpenDraftOnCreate: true,
@@ -154,9 +188,11 @@ function normalizeScheduleTime(value: unknown, fallback = '09:00') {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(normalized) ? normalized : fallback
 }
 
-function normalizeTemplates(rawTemplates: unknown) {
-  const defaults = createDefaultTemplates()
-  const legacyDefaults = createLegacyDefaultTemplates()
+function normalizeTemplates(
+  rawTemplates: unknown,
+  defaults = createDefaultTemplates(),
+  legacyDefaults = createLegacyDefaultTemplates(),
+) {
 
   if (!Array.isArray(rawTemplates) || rawTemplates.length === 0) {
     return defaults
@@ -450,6 +486,11 @@ function normalizeDatabase(rawData: unknown): Database {
           : database.settings.sender.fromName) || 'Hessa Enterprises',
     },
     templates: normalizeTemplates('templates' in rawSettings ? rawSettings.templates : []),
+    proposalTemplates: normalizeTemplates(
+      'proposalTemplates' in rawSettings ? rawSettings.proposalTemplates : [],
+      createDefaultProposalTemplates(),
+      createLegacyDefaultProposalTemplates(),
+    ),
     automation: {
       intervalDays:
         'intervalDays' in rawAutomation &&
@@ -786,12 +827,40 @@ function buildTemplateContext(
   }
 }
 
+function buildProposalTemplateContext(
+  proposal: ProposalRecord,
+  settings: SettingsState,
+  followUpNumber: number,
+  scheduledFor: string,
+) {
+  return {
+    attemptsCompleted: String(proposal.sentFollowUps),
+    company: proposal.company || '',
+    companyOrName: proposal.company || proposal.clientName,
+    contactNumber: String(followUpNumber),
+    createdDate: toDateLabel(proposal.createdAt),
+    email: proposal.email,
+    fromEmail: settings.sender.fromEmail,
+    fromName: settings.sender.fromName || 'Hessa Enterprises',
+    maxContacts: String(proposal.targetFollowUps),
+    name: proposal.clientName,
+    nextContactDate: scheduledFor ? toDateLabel(scheduledFor) : '',
+    notes: proposal.notes || '',
+    scheduledDate: scheduledFor ? toDateLabel(scheduledFor) : '',
+    scheduledTime: scheduledFor ? toTimeLabel(scheduledFor) : '',
+  }
+}
+
 function fillTemplate(template: string, context: Record<string, string>) {
   return template.replace(/{{\s*([a-zA-Z0-9]+)\s*}}/g, (_, key) => context[key] ?? '')
 }
 
 function getTemplate(settings: SettingsState, contactNumber: number) {
   return settings.templates[contactNumber - 1] ?? settings.templates.at(-1)
+}
+
+function getProposalTemplate(settings: SettingsState, contactNumber: number) {
+  return settings.proposalTemplates[contactNumber - 1] ?? settings.proposalTemplates.at(-1)
 }
 
 function buildEmailPayload(
@@ -816,26 +885,15 @@ function buildProposalEmailPayload(
   proposal: ProposalRecord,
   settings: SettingsState,
   followUpNumber: number,
+  scheduledFor: string,
 ) {
-  const fromName = settings.sender.fromName || 'Hessa Enterprises'
-  const subject = `Following up on the proposal we sent`
-  const body = [
-    `Hi ${proposal.clientName},`,
-    '',
-    'I wanted to follow up on the proposal we sent.',
-    'Do you have any questions, or would you like to move forward with the next step?',
-    '',
-    'If it is helpful, reply here and we will take it from there.',
-    '',
-    'Best,',
-    fromName,
-  ].join('\n')
+  const template = getProposalTemplate(settings, followUpNumber)
+  const context = buildProposalTemplateContext(proposal, settings, followUpNumber, scheduledFor)
+  const subject = fillTemplate(template.subject, context)
+  const body = fillTemplate(template.body, context)
 
   return {
-    subject:
-      followUpNumber > 1
-        ? `${subject} - follow-up ${followUpNumber}`
-        : subject,
+    subject,
     body,
     preview: body.split('\n').find((line) => line.trim())?.trim() ?? '',
   }
@@ -970,18 +1028,35 @@ function persistDatabase(userId: string, database: Database) {
 }
 
 function mergeSettings(currentSettings: SettingsState, incomingSettings: SettingsInput): SettingsState {
+  const normalizedAppointmentTemplates = normalizeTemplates(incomingSettings.templates)
+  const normalizedProposalTemplates = normalizeTemplates(
+    incomingSettings.proposalTemplates,
+    createDefaultProposalTemplates(),
+    createLegacyDefaultProposalTemplates(),
+  )
+
   return {
     sender: {
       fromEmail: incomingSettings.sender.fromEmail.trim(),
       fromName: incomingSettings.sender.fromName.trim() || 'Hessa Enterprises',
     },
-    templates: normalizeTemplates(incomingSettings.templates).map((template, index) => ({
+    templates: normalizedAppointmentTemplates.map((template, index) => ({
       id: template.id,
       title: template.title,
       subject:
         incomingSettings.templates[index]?.subject?.trim() ||
         currentSettings.templates[index].subject,
       body: incomingSettings.templates[index]?.body || currentSettings.templates[index].body,
+    })),
+    proposalTemplates: normalizedProposalTemplates.map((template, index) => ({
+      id: template.id,
+      title: template.title,
+      subject:
+        incomingSettings.proposalTemplates[index]?.subject?.trim() ||
+        currentSettings.proposalTemplates[index].subject,
+      body:
+        incomingSettings.proposalTemplates[index]?.body ||
+        currentSettings.proposalTemplates[index].body,
     })),
     automation: {
       intervalDays: Math.max(1, incomingSettings.automation.intervalDays || 2),
@@ -1114,6 +1189,7 @@ async function advanceProposalWithDraft(
     proposal,
     database.settings,
     followUpNumber,
+    scheduledFor,
   )
   const delivery = await deliverFollowUpEmail(proposal.email, payload.subject, payload.body, {
     clientName: proposal.clientName,

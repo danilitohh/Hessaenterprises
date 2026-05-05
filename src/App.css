@@ -1345,6 +1345,12 @@
   gap: 14px;
 }
 
+.dashboard-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .dashboard-kpi-card {
   display: grid;
   gap: 10px;
@@ -1505,6 +1511,10 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.tracking-detail-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .followup-detail-grid div,
@@ -1913,6 +1923,27 @@
   display: grid;
   gap: 12px;
   padding: 20px;
+}
+
+.template-group {
+  display: grid;
+  gap: 14px;
+}
+
+.template-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 22px;
+  background: rgba(255, 252, 247, 0.78);
+}
+
+.template-group-heading h3 {
+  margin-top: 6px;
+  color: var(--ink-strong);
 }
 
 .template-editor-head {
@@ -2396,7 +2427,7 @@
   }
 
   .sidebar-nav {
-    grid-template-columns: repeat(7, minmax(92px, 1fr));
+    grid-template-columns: repeat(6, minmax(92px, 1fr));
     overflow-x: auto;
   }
 
@@ -2421,6 +2452,10 @@
 
 @media (max-width: 980px) {
   .dashboard-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-overview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2481,7 +2516,7 @@
 
   .sidebar-nav {
     display: grid;
-    grid-template-columns: repeat(7, minmax(76px, 1fr));
+    grid-template-columns: repeat(6, minmax(76px, 1fr));
     gap: 6px;
     overflow-x: auto;
   }
@@ -2540,6 +2575,7 @@
 
 @media (max-width: 560px) {
   .dashboard-kpi-grid,
+  .dashboard-overview-grid,
   .dashboard-operations-grid,
   .client-workspace-grid,
   .proposal-workspace-grid,
