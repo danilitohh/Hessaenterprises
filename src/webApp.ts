@@ -16,6 +16,7 @@ import type {
   LoginInput,
   PasswordResetInput,
   PasswordUpdateInput,
+  PlanPricingRecord,
   ProposalInput,
   ProposalRecord,
   RegisterInput,
@@ -36,6 +37,7 @@ const DEFAULT_SUPER_ADMIN_EMAILS = ['kevin.hessam@gmail.com', 'danilitohhh@gmail
 const DEFAULT_TRY_COUNT = 4
 const MAX_SEQUENCE_TRIES = 100
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
+const BILLING_PLAN_OPTIONS: AccountPlan[] = ['free', 'basic', 'pro', 'business']
 const statusPriority = {
   active: 0,
   finished: 1,
@@ -52,6 +54,7 @@ type Database = {
 
 type PlatformRegistry = {
   accounts: AccountRecord[]
+  planPricing: PlanPricingRecord[]
   users: AccountUserRecord[]
   version: number
 }
@@ -726,6 +729,91 @@ function normalizePlan(value: unknown): AccountPlan {
   return value === 'basic' || value === 'pro' || value === 'business' ? value : 'free'
 }
 
+function createDefaultPlanPricing(plan: AccountPlan): PlanPricingRecord {
+  return {
+    plan,
+    currency: 'USD',
+    monthlyPriceCents: 0,
+    annualPriceCents: 0,
+    discountPercent: 0,
+    isComingSoon: true,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function normalizeCurrency(value: unknown) {
+  const currency = typeof value === 'string' ? value.trim().toUpperCase() : ''
+  return /^[A-Z]{3}$/.test(currency) ? currency : 'USD'
+}
+
+function normalizeMoneyCents(value: unknown) {
+  const amount = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount) : 0
+}
+
+function normalizeDiscountPercent(value: unknown) {
+  const discount = typeof value === 'number' ? value : Number(value)
+
+  if (!Number.isFinite(discount)) {
+    return 0
+  }
+
+  return Math.min(100, Math.max(0, Math.round(discount)))
+}
+
+function normalizePlanPricing(rawPricing: unknown): PlanPricingRecord {
+  const normalized =
+    rawPricing && typeof rawPricing === 'object' ? rawPricing : Object.create(null)
+  const plan = normalizePlan('plan' in normalized ? normalized.plan : 'free')
+
+  return {
+    plan,
+    currency: normalizeCurrency('currency' in normalized ? normalized.currency : 'USD'),
+    monthlyPriceCents: normalizeMoneyCents(
+      'monthlyPriceCents' in normalized
+        ? normalized.monthlyPriceCents
+        : 'monthly_price_cents' in normalized
+          ? normalized.monthly_price_cents
+          : 0,
+    ),
+    annualPriceCents: normalizeMoneyCents(
+      'annualPriceCents' in normalized
+        ? normalized.annualPriceCents
+        : 'annual_price_cents' in normalized
+          ? normalized.annual_price_cents
+          : 0,
+    ),
+    discountPercent: normalizeDiscountPercent(
+      'discountPercent' in normalized
+        ? normalized.discountPercent
+        : 'discount_percent' in normalized
+          ? normalized.discount_percent
+          : 0,
+    ),
+    isComingSoon:
+      'isComingSoon' in normalized
+        ? normalized.isComingSoon !== false
+        : 'is_coming_soon' in normalized
+          ? normalized.is_coming_soon !== false
+          : true,
+    updatedAt:
+      ('updatedAt' in normalized && typeof normalized.updatedAt === 'string'
+        ? normalized.updatedAt
+        : 'updated_at' in normalized && typeof normalized.updated_at === 'string'
+          ? normalized.updated_at
+          : null) || new Date().toISOString(),
+  }
+}
+
+function normalizePlanPricingList(rawPricing: unknown) {
+  const incomingPricing = Array.isArray(rawPricing) ? rawPricing.map(normalizePlanPricing) : []
+
+  return BILLING_PLAN_OPTIONS.map((plan) => {
+    const existingPricing = incomingPricing.find((pricing) => pricing.plan === plan)
+    return existingPricing ?? createDefaultPlanPricing(plan)
+  })
+}
+
 function normalizeSubscriptionStatus(value: unknown): SubscriptionStatus {
   return value === 'trial' ||
     value === 'active' ||
@@ -832,6 +920,9 @@ function normalizePlatformRegistry(rawPlatform: unknown): PlatformRegistry {
       'accounts' in normalized && Array.isArray(normalized.accounts)
         ? normalized.accounts.map(normalizeAccount)
         : [],
+    planPricing: normalizePlanPricingList(
+      'planPricing' in normalized ? normalized.planPricing : [],
+    ),
     users:
       'users' in normalized && Array.isArray(normalized.users)
         ? normalized.users.map(normalizeAccountUser)
@@ -1744,6 +1835,7 @@ function getAdminPlatformState(): AdminPlatformState {
   return {
     accounts,
     metrics,
+    planPricing: platform.planPricing,
   }
 }
 
@@ -1834,6 +1926,25 @@ function mapSupabaseAccountUser(rawUser: unknown): AccountUserRecord {
   })
 }
 
+function mapSupabasePlanPricing(rawPricing: unknown): PlanPricingRecord {
+  const normalized =
+    rawPricing && typeof rawPricing === 'object' ? rawPricing : Object.create(null)
+
+  return normalizePlanPricing({
+    annual_price_cents:
+      'annual_price_cents' in normalized ? normalized.annual_price_cents : 0,
+    currency: 'currency' in normalized ? normalized.currency : 'USD',
+    discount_percent:
+      'discount_percent' in normalized ? normalized.discount_percent : 0,
+    is_coming_soon:
+      'is_coming_soon' in normalized ? normalized.is_coming_soon : true,
+    monthly_price_cents:
+      'monthly_price_cents' in normalized ? normalized.monthly_price_cents : 0,
+    plan: 'plan' in normalized ? normalized.plan : 'free',
+    updated_at: 'updated_at' in normalized ? normalized.updated_at : null,
+  })
+}
+
 function countRowsByAccount(rows: Array<{ account_id?: unknown }>) {
   return rows.reduce((counts, row) => {
     if (typeof row.account_id === 'string') {
@@ -1886,6 +1997,14 @@ async function getAdminPlatformStateFromSupabase() {
     throw new Error(usersError.message)
   }
 
+  const { data: pricingRows, error: pricingError } = await supabase
+    .from('plan_pricing')
+    .select('*')
+
+  if (pricingError && !isSupabaseSchemaUnavailable(pricingError)) {
+    throw new Error(pricingError.message)
+  }
+
   const [
     appointmentRows,
     proposalRows,
@@ -1901,6 +2020,9 @@ async function getAdminPlatformStateFromSupabase() {
   const proposalCounts = countRowsByAccount(proposalRows)
   const emailEventCounts = countRowsByAccount([...emailEventRows, ...gmailSendLogRows])
   const users = (userRows ?? []).map(mapSupabaseAccountUser)
+  const planPricing = normalizePlanPricingList(
+    pricingError ? [] : (pricingRows ?? []).map(mapSupabasePlanPricing),
+  )
   const accounts = (accountRows ?? []).map((rawAccount) => {
     const account = mapSupabaseAccount(rawAccount)
     const accountUsers = users.filter((user) => user.accountId === account.id)
@@ -1945,6 +2067,25 @@ async function getAdminPlatformStateFromSupabase() {
   return {
     accounts,
     metrics,
+    planPricing,
+  }
+}
+
+async function getBestAdminPlatformState() {
+  const localState = getAdminPlatformState()
+  const supabaseState = await getAdminPlatformStateFromSupabase()
+
+  if (!supabaseState) {
+    return localState
+  }
+
+  if (supabaseState.accounts.length > 0 || localState.accounts.length === 0) {
+    return supabaseState
+  }
+
+  return {
+    ...localState,
+    planPricing: supabaseState.planPricing,
   }
 }
 
@@ -1975,6 +2116,32 @@ async function updateSupabaseAccount(
   return Array.isArray(data) && data.length > 0
 }
 
+async function updateSupabasePlanPricing(pricing: PlanPricingRecord) {
+  const supabase = getSupabaseClient()
+  const { error } = await supabase.from('plan_pricing').upsert(
+    {
+      annual_price_cents: pricing.annualPriceCents,
+      currency: pricing.currency,
+      discount_percent: pricing.discountPercent,
+      is_coming_soon: pricing.isComingSoon,
+      monthly_price_cents: pricing.monthlyPriceCents,
+      plan: pricing.plan,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'plan' },
+  )
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return false
+    }
+
+    throw new Error(error.message)
+  }
+
+  return true
+}
+
 function updatePlatformAccount(
   accountId: string,
   updater: (account: AccountRecord) => AccountRecord,
@@ -1987,6 +2154,23 @@ function updatePlatformAccount(
   }
 
   platform.accounts[accountIndex] = updater(platform.accounts[accountIndex])
+  savePlatformRegistry(platform)
+}
+
+function updatePlatformPlanPricing(
+  plan: AccountPlan,
+  updater: (pricing: PlanPricingRecord) => PlanPricingRecord,
+) {
+  const platform = loadPlatformRegistry()
+  const currentPricing = normalizePlanPricingList(platform.planPricing)
+  const pricingIndex = currentPricing.findIndex((pricing) => pricing.plan === plan)
+
+  if (pricingIndex === -1) {
+    throw new Error('Plan pricing could not be found.')
+  }
+
+  currentPricing[pricingIndex] = updater(currentPricing[pricingIndex])
+  platform.planPricing = currentPricing
   savePlatformRegistry(platform)
 }
 
@@ -2145,14 +2329,7 @@ export const webApp = {
 
   async getAdminState() {
     await requireSuperAdminContext()
-    const localState = getAdminPlatformState()
-    const supabaseState = await getAdminPlatformStateFromSupabase()
-
-    if (supabaseState && (supabaseState.accounts.length > 0 || localState.accounts.length === 0)) {
-      return supabaseState
-    }
-
-    return localState
+    return getBestAdminPlatformState()
   },
 
   async updateAccountPlan(accountId: string, plan: AccountPlan) {
@@ -2170,7 +2347,7 @@ export const webApp = {
     const updatedInSupabase = await updateSupabaseAccount(accountId, planPatch)
 
     if (updatedInSupabase) {
-      return (await getAdminPlatformStateFromSupabase()) ?? getAdminPlatformState()
+      return getBestAdminPlatformState()
     }
 
     updatePlatformAccount(accountId, (account) => ({
@@ -2203,7 +2380,7 @@ export const webApp = {
     })
 
     if (updatedInSupabase) {
-      return (await getAdminPlatformStateFromSupabase()) ?? getAdminPlatformState()
+      return getBestAdminPlatformState()
     }
 
     updatePlatformAccount(accountId, (account) => ({
@@ -2219,6 +2396,23 @@ export const webApp = {
             : account.subscriptionStatus,
       updatedAt: new Date().toISOString(),
     }))
+
+    return getAdminPlatformState()
+  },
+
+  async updatePlanPricing(pricingInput: PlanPricingRecord) {
+    await requireSuperAdminContext()
+    const pricing = {
+      ...normalizePlanPricing(pricingInput),
+      updatedAt: new Date().toISOString(),
+    }
+    const updatedInSupabase = await updateSupabasePlanPricing(pricing)
+
+    if (updatedInSupabase) {
+      return getBestAdminPlatformState()
+    }
+
+    updatePlatformPlanPricing(pricing.plan, () => pricing)
 
     return getAdminPlatformState()
   },

@@ -20,6 +20,7 @@ import type {
   LoginInput,
   PasswordResetInput,
   PasswordUpdateInput,
+  PlanPricingRecord,
   ProposalInput,
   ProposalRecord,
   ProposalStatus,
@@ -107,6 +108,14 @@ type TemplateWorkflow = 'appointment' | 'proposal'
 type TemplateEditorState = {
   index: number
   workflow: TemplateWorkflow
+}
+
+type PlanPricingDraft = {
+  annualPrice: string
+  currency: string
+  discountPercent: string
+  isComingSoon: boolean
+  monthlyPrice: string
 }
 
 type ProposalFormState = {
@@ -332,6 +341,51 @@ function formatDateTime(isoDate: string | null) {
   }).format(new Date(isoDate))
 }
 
+function centsToPrice(cents: number) {
+  return cents > 0 ? (cents / 100).toFixed(2) : ''
+}
+
+function priceToCents(price: string) {
+  const amount = Number(price)
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) : 0
+}
+
+function createPlanPricingDraft(pricing: PlanPricingRecord): PlanPricingDraft {
+  return {
+    annualPrice: centsToPrice(pricing.annualPriceCents),
+    currency: pricing.currency,
+    discountPercent: pricing.discountPercent ? String(pricing.discountPercent) : '',
+    isComingSoon: pricing.isComingSoon,
+    monthlyPrice: centsToPrice(pricing.monthlyPriceCents),
+  }
+}
+
+function createPlanPricingDrafts(planPricing: PlanPricingRecord[] = []) {
+  return planPricing.reduce(
+    (drafts, pricing) => ({
+      ...drafts,
+      [pricing.plan]: createPlanPricingDraft(pricing),
+    }),
+    {} as Partial<Record<AccountPlan, PlanPricingDraft>>,
+  )
+}
+
+function buildPlanPricingFromDraft(
+  plan: AccountPlan,
+  draft: PlanPricingDraft,
+  currentPricing?: PlanPricingRecord,
+): PlanPricingRecord {
+  return {
+    annualPriceCents: priceToCents(draft.annualPrice),
+    currency: draft.currency.trim().toUpperCase() || 'USD',
+    discountPercent: Math.min(100, Math.max(0, Math.round(Number(draft.discountPercent) || 0))),
+    isComingSoon: draft.isComingSoon,
+    monthlyPriceCents: priceToCents(draft.monthlyPrice),
+    plan,
+    updatedAt: currentPricing?.updatedAt ?? new Date().toISOString(),
+  }
+}
+
 function formatRelativeDue(isoDate: string | null) {
   if (!isoDate) {
     return 'Not scheduled'
@@ -498,6 +552,38 @@ const landingFeatures = [
   },
 ]
 
+const landingPlanCards: Array<{
+  plan: AccountPlan
+  title: string
+  description: string
+  features: string[]
+}> = [
+  {
+    plan: 'free',
+    title: 'Free',
+    description: 'Start organizing follow-ups while the billing system is being prepared.',
+    features: ['Basic workspace access', 'Appointment follow-up tracking', 'Proposal reminders'],
+  },
+  {
+    plan: 'basic',
+    title: 'Basic',
+    description: 'Designed for solo operators who need a clean client follow-up rhythm.',
+    features: ['More follow-up sequences', 'Reusable templates', 'Gmail sending readiness'],
+  },
+  {
+    plan: 'pro',
+    title: 'Pro',
+    description: 'Built for growing teams that manage appointments and proposal pipelines daily.',
+    features: ['Team workflow controls', 'Advanced tracking overview', 'Priority workspace tools'],
+  },
+  {
+    plan: 'business',
+    title: 'Business',
+    description: 'Prepared for service companies that need admin control and future billing scale.',
+    features: ['Account-level controls', 'Subscription readiness', 'Future payment integrations'],
+  },
+]
+
 const howItWorksSteps = [
   {
     title: 'Add your client',
@@ -661,8 +747,12 @@ function App() {
     typeof window === 'undefined' ? false : isAdminPath(window.location.pathname),
   )
   const [adminState, setAdminState] = useState<AdminPlatformState | null>(null)
+  const [planPricingDrafts, setPlanPricingDrafts] = useState<
+    Partial<Record<AccountPlan, PlanPricingDraft>>
+  >({})
   const [isLoadingAdmin, setIsLoadingAdmin] = useState(false)
   const [busyAdminAccountId, setBusyAdminAccountId] = useState<string | null>(null)
+  const [busyPlanPricingId, setBusyPlanPricingId] = useState<AccountPlan | null>(null)
   const [activeDashboardPage, setActiveDashboardPage] = useState<DashboardPageId>(() =>
     getInitialDashboardPage(),
   )
@@ -762,6 +852,11 @@ function App() {
     }
   }
 
+  function applyAdminState(nextAdminState: AdminPlatformState) {
+    setAdminState(nextAdminState)
+    setPlanPricingDrafts(createPlanPricingDrafts(nextAdminState.planPricing))
+  }
+
   const refreshState = useEffectEvent(async (syncSettings = false) => {
     try {
       const nextState = await webApp.getAppState()
@@ -774,6 +869,7 @@ function App() {
         setAppState(null)
         setSettingsForm(null)
         setAdminState(null)
+        setPlanPricingDrafts({})
       }
 
       setNotice({
@@ -791,7 +887,7 @@ function App() {
 
     try {
       const nextAdminState = await webApp.getAdminState()
-      setAdminState(nextAdminState)
+      applyAdminState(nextAdminState)
     } catch (error) {
       setNotice({
         tone: 'error',
@@ -812,7 +908,7 @@ function App() {
 
     try {
       const nextAdminState = await webApp.updateAccountPlan(accountId, plan)
-      setAdminState(nextAdminState)
+      applyAdminState(nextAdminState)
       setNotice({
         tone: 'success',
         message: 'Account plan updated.',
@@ -833,7 +929,7 @@ function App() {
 
     try {
       const nextAdminState = await webApp.updateAccountStatus(accountId, status)
-      setAdminState(nextAdminState)
+      applyAdminState(nextAdminState)
       setNotice({
         tone: 'success',
         message: status === 'suspended' ? 'Account suspended.' : 'Account activated.',
@@ -846,6 +942,63 @@ function App() {
       recordDiagnostic('Update account status', error)
     } finally {
       setBusyAdminAccountId(null)
+    }
+  }
+
+  function updatePlanPricingDraft(plan: AccountPlan, patch: Partial<PlanPricingDraft>) {
+    setPlanPricingDrafts((currentDrafts) => {
+      const currentPricing = adminState?.planPricing.find((pricing) => pricing.plan === plan)
+      const currentDraft =
+        currentDrafts[plan] ??
+        (currentPricing
+          ? createPlanPricingDraft(currentPricing)
+          : createPlanPricingDraft({
+              annualPriceCents: 0,
+              currency: 'USD',
+              discountPercent: 0,
+              isComingSoon: true,
+              monthlyPriceCents: 0,
+              plan,
+              updatedAt: new Date().toISOString(),
+            }))
+
+      return {
+        ...currentDrafts,
+        [plan]: {
+          ...currentDraft,
+          ...patch,
+        },
+      }
+    })
+  }
+
+  async function handlePlanPricingSave(plan: AccountPlan) {
+    const currentPricing = adminState?.planPricing.find((pricing) => pricing.plan === plan)
+    const draft = planPricingDrafts[plan]
+
+    if (!draft) {
+      return
+    }
+
+    setBusyPlanPricingId(plan)
+
+    try {
+      const nextAdminState = await webApp.updatePlanPricing(
+        buildPlanPricingFromDraft(plan, draft, currentPricing),
+      )
+      applyAdminState(nextAdminState)
+      setNotice({
+        tone: 'success',
+        message: `${plan} pricing settings saved.`,
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: toErrorMessage(error),
+      })
+      recordDiagnostic('Update plan pricing', error)
+    } finally {
+      setBusyPlanPricingId(null)
     }
   }
 
@@ -1050,6 +1203,7 @@ function App() {
           setSettingsForm(null)
           setGmailConnection(null)
           setAdminState(null)
+          setPlanPricingDrafts({})
           return
         }
 
@@ -1423,6 +1577,7 @@ function App() {
       setSettingsForm(null)
       setGmailConnection(null)
       setAdminState(null)
+      setPlanPricingDrafts({})
       setNotice({
         tone: 'info',
         message: 'Password recovery was canceled. You can log in again when ready.',
@@ -1444,6 +1599,7 @@ function App() {
       setSettingsForm(null)
       setGmailConnection(null)
       setAdminState(null)
+      setPlanPricingDrafts({})
       setNotice({
         tone: 'info',
         message: 'You have been signed out.',
@@ -2082,6 +2238,37 @@ function App() {
                 </div>
               </div>
             </section>
+
+            <section className="panel landing-pricing-panel">
+              <div className="landing-section-heading">
+                <span className="eyebrow">Plans</span>
+                <h2>Flexible plans are coming soon.</h2>
+                <p>
+                  Pricing is not active yet. Hessa is being prepared for monthly plans so each
+                  business can grow from a simple workspace into a full follow-up operating system.
+                </p>
+              </div>
+
+              <div className="landing-plan-grid">
+                {landingPlanCards.map((plan) => (
+                  <article className="landing-plan-card" key={plan.plan}>
+                    <div>
+                      <span className="stage-chip">Coming soon</span>
+                      <h3>{plan.title}</h3>
+                      <p>{plan.description}</p>
+                    </div>
+
+                    <strong>Pricing to be announced</strong>
+
+                    <ul>
+                      {plan.features.map((feature) => (
+                        <li key={feature}>{feature}</li>
+                      ))}
+                    </ul>
+                  </article>
+                ))}
+              </div>
+            </section>
           </div>
 
           <article className="panel auth-card landing-auth-card" id="account-access">
@@ -2448,6 +2635,18 @@ function App() {
 
   if (isAdminRoute) {
     const canAccessAdmin = appState.currentUser.role === 'super_admin'
+    const adminUsers =
+      adminState?.accounts
+        .flatMap((account) =>
+          account.users.map((user) => ({
+            ...user,
+            accountName: account.name,
+            accountPlan: account.plan,
+            accountStatus: account.status,
+          })),
+        )
+        .sort((firstUser, secondUser) => firstUser.email.localeCompare(secondUser.email)) ?? []
+    const adminPlanPricing = adminState?.planPricing ?? []
 
     return (
       <main className="dashboard-shell super-admin-shell">
@@ -2463,8 +2662,26 @@ function App() {
           </div>
 
           <nav className="sidebar-nav" aria-label="Admin navigation">
-            <button className="sidebar-nav-item sidebar-nav-item-active" type="button">
+            <button
+              className="sidebar-nav-item sidebar-nav-item-active"
+              onClick={() => document.getElementById('admin-accounts')?.scrollIntoView({ behavior: 'smooth' })}
+              type="button"
+            >
               <span>Accounts</span>
+            </button>
+            <button
+              className="sidebar-nav-item"
+              onClick={() => document.getElementById('admin-users')?.scrollIntoView({ behavior: 'smooth' })}
+              type="button"
+            >
+              <span>Users</span>
+            </button>
+            <button
+              className="sidebar-nav-item"
+              onClick={() => document.getElementById('admin-pricing')?.scrollIntoView({ behavior: 'smooth' })}
+              type="button"
+            >
+              <span>Pricing</span>
             </button>
             <button
               className="sidebar-nav-item"
@@ -2544,7 +2761,167 @@ function App() {
                 </div>
               </section>
 
-              <section className="dashboard-card">
+              <section className="dashboard-card" id="admin-pricing">
+                <div className="dashboard-card-header">
+                  <div>
+                    <span className="eyebrow">Billing readiness</span>
+                    <h2>Plan pricing and discounts</h2>
+                    <p className="dashboard-card-copy">
+                      Prepare future prices and discounts here. Payments stay disabled until a
+                      billing provider is connected.
+                    </p>
+                  </div>
+                  <span className="demo-data-badge live-data-badge">Coming soon</span>
+                </div>
+
+                <div className="admin-pricing-grid">
+                  {adminPlanPricing.map((pricing) => {
+                    const draft = planPricingDrafts[pricing.plan] ?? createPlanPricingDraft(pricing)
+
+                    return (
+                      <article className="admin-pricing-card" key={pricing.plan}>
+                        <div className="admin-pricing-card-head">
+                          <div>
+                            <span className="stage-chip">{pricing.isComingSoon ? 'Coming soon' : 'Ready'}</span>
+                            <h3>{pricing.plan}</h3>
+                          </div>
+                          <label className="admin-toggle-row">
+                            <input
+                              checked={draft.isComingSoon}
+                              onChange={(event) =>
+                                updatePlanPricingDraft(pricing.plan, {
+                                  isComingSoon: event.target.checked,
+                                })
+                              }
+                              type="checkbox"
+                            />
+                            <span>Show as coming soon</span>
+                          </label>
+                        </div>
+
+                        <div className="admin-pricing-fields">
+                          <label className="field">
+                            <span>Currency</span>
+                            <input
+                              className="text-input"
+                              maxLength={3}
+                              onChange={(event) =>
+                                updatePlanPricingDraft(pricing.plan, {
+                                  currency: event.target.value,
+                                })
+                              }
+                              placeholder="USD"
+                              value={draft.currency}
+                            />
+                          </label>
+
+                          <label className="field">
+                            <span>Monthly price</span>
+                            <input
+                              className="text-input"
+                              min="0"
+                              onChange={(event) =>
+                                updatePlanPricingDraft(pricing.plan, {
+                                  monthlyPrice: event.target.value,
+                                })
+                              }
+                              placeholder="0.00"
+                              step="0.01"
+                              type="number"
+                              value={draft.monthlyPrice}
+                            />
+                          </label>
+
+                          <label className="field">
+                            <span>Annual price</span>
+                            <input
+                              className="text-input"
+                              min="0"
+                              onChange={(event) =>
+                                updatePlanPricingDraft(pricing.plan, {
+                                  annualPrice: event.target.value,
+                                })
+                              }
+                              placeholder="0.00"
+                              step="0.01"
+                              type="number"
+                              value={draft.annualPrice}
+                            />
+                          </label>
+
+                          <label className="field">
+                            <span>Discount %</span>
+                            <input
+                              className="text-input"
+                              max="100"
+                              min="0"
+                              onChange={(event) =>
+                                updatePlanPricingDraft(pricing.plan, {
+                                  discountPercent: event.target.value,
+                                })
+                              }
+                              placeholder="0"
+                              type="number"
+                              value={draft.discountPercent}
+                            />
+                          </label>
+                        </div>
+
+                        <button
+                          className="secondary-button full-width"
+                          disabled={busyPlanPricingId === pricing.plan}
+                          onClick={() => void handlePlanPricingSave(pricing.plan)}
+                          type="button"
+                        >
+                          {busyPlanPricingId === pricing.plan ? 'Saving...' : 'Save plan pricing'}
+                        </button>
+                      </article>
+                    )
+                  })}
+                </div>
+              </section>
+
+              <section className="dashboard-card" id="admin-users">
+                <div className="dashboard-card-header">
+                  <div>
+                    <span className="eyebrow">Users</span>
+                    <h2>All registered users</h2>
+                    <p className="dashboard-card-copy">
+                      Every user known to the SaaS account system appears here with account, role,
+                      plan, and account status.
+                    </p>
+                  </div>
+                  <span className="demo-data-badge live-data-badge">{adminUsers.length} users</span>
+                </div>
+
+                {adminUsers.length ? (
+                  <div className="admin-all-users-list">
+                    {adminUsers.map((user) => (
+                      <article className="admin-all-user-row" key={`${user.accountId}-${user.userId}`}>
+                        <span>{getInitials(user.name || user.email)}</span>
+                        <div>
+                          <strong>{user.name || user.email}</strong>
+                          <small>{user.email}</small>
+                        </div>
+                        <div>
+                          <strong>{user.accountName}</strong>
+                          <small>{user.accountId}</small>
+                        </div>
+                        <em>{user.role}</em>
+                        <em>{user.accountPlan}</em>
+                        <em>{user.accountStatus}</em>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="dashboard-empty-state">
+                    <h3>No users registered yet</h3>
+                    <p>Users will appear here after they sign up or log in.</p>
+                  </div>
+                )}
+              </section>
+
+              <section className="dashboard-card" id="admin-accounts">
                 <div className="dashboard-card-header">
                   <div>
                     <span className="eyebrow">Accounts</span>

@@ -639,6 +639,56 @@
   line-height: 1.58;
 }
 
+.landing-pricing-panel {
+  display: grid;
+  gap: 24px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(196, 154, 108, 0.18), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(250, 246, 239, 0.94));
+}
+
+.landing-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.landing-plan-card {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  min-height: 330px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.landing-plan-card h3 {
+  margin-top: 14px;
+  color: var(--ink-strong);
+  font-size: clamp(1.35rem, 3vw, 2rem);
+}
+
+.landing-plan-card p,
+.landing-plan-card li {
+  color: var(--ink-soft);
+  line-height: 1.62;
+}
+
+.landing-plan-card > strong {
+  color: var(--ink-strong);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.15rem;
+}
+
+.landing-plan-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
 .landing-auth-card {
   position: sticky;
   top: 24px;
@@ -1364,6 +1414,104 @@
 .admin-account-list {
   display: grid;
   gap: 14px;
+}
+
+.admin-pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-pricing-card {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  padding: 18px;
+  border: 1px solid var(--dashboard-border);
+  border-radius: 24px;
+  background: linear-gradient(180deg, #fff, #fbf8f3);
+}
+
+.admin-pricing-card-head {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-pricing-card h3 {
+  margin-top: 10px;
+  color: var(--dashboard-ink);
+  text-transform: capitalize;
+}
+
+.admin-pricing-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-toggle-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--dashboard-muted);
+  font-weight: 800;
+}
+
+.admin-toggle-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--dashboard-ink);
+}
+
+.admin-all-users-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-all-user-row {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) minmax(180px, 1fr) repeat(3, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--dashboard-border);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.admin-all-user-row > span {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--dashboard-ink);
+  color: #fff;
+  font-weight: 900;
+}
+
+.admin-all-user-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-all-user-row strong {
+  color: var(--dashboard-ink);
+}
+
+.admin-all-user-row small {
+  color: var(--dashboard-muted);
+  overflow-wrap: anywhere;
+}
+
+.admin-all-user-row em {
+  padding: 8px 10px;
+  border: 1px solid var(--dashboard-border);
+  border-radius: 999px;
+  color: var(--dashboard-muted);
+  font-style: normal;
+  font-weight: 900;
+  text-transform: capitalize;
 }
 
 .admin-account-card {
@@ -2531,6 +2679,7 @@
   .dashboard-preview-card,
   .how-it-works-panel,
   .investment-panel,
+  .landing-pricing-panel,
   .hero-brief,
   .auth-card,
   .studio-card,
@@ -2546,6 +2695,7 @@
 
   .home-feature-list,
   .landing-feature-grid,
+  .landing-plan-grid,
   .how-step-grid,
   .metric-ribbon {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2558,6 +2708,7 @@
   .landing-feature-grid,
   .recovery-card-list,
   .preview-metric-grid,
+  .landing-plan-grid,
   .how-step-grid,
   .metric-ribbon,
   .attempt-track {
@@ -2635,11 +2786,13 @@
   .dashboard-operations-grid,
   .client-workspace-grid,
   .proposal-workspace-grid,
-  .admin-account-head {
+  .admin-account-head,
+  .admin-pricing-grid {
     grid-template-columns: 1fr;
   }
 
-  .admin-account-metrics {
+  .admin-account-metrics,
+  .admin-all-user-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -2777,7 +2930,9 @@
   .pipeline-stage-list,
   .template-picker-card,
   .admin-account-controls,
-  .admin-account-metrics {
+  .admin-account-metrics,
+  .admin-pricing-grid,
+  .admin-all-user-row {
     grid-template-columns: 1fr;
   }
 

@@ -111,6 +111,25 @@ create table if not exists public.account_users (
   unique (user_id)
 );
 
+create table if not exists public.plan_pricing (
+  plan public.account_plan primary key,
+  currency text not null default 'USD',
+  monthly_price_cents integer not null default 0 check (monthly_price_cents >= 0),
+  annual_price_cents integer not null default 0 check (annual_price_cents >= 0),
+  discount_percent integer not null default 0 check (discount_percent between 0 and 100),
+  is_coming_soon boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into public.plan_pricing (plan)
+values
+  ('free'),
+  ('basic'),
+  ('pro'),
+  ('business')
+on conflict (plan) do nothing;
+
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
@@ -130,6 +149,12 @@ execute function public.touch_updated_at();
 drop trigger if exists touch_account_users_updated_at on public.account_users;
 create trigger touch_account_users_updated_at
 before update on public.account_users
+for each row
+execute function public.touch_updated_at();
+
+drop trigger if exists touch_plan_pricing_updated_at on public.plan_pricing;
+create trigger touch_plan_pricing_updated_at
+before update on public.plan_pricing
 for each row
 execute function public.touch_updated_at();
 
@@ -468,6 +493,7 @@ end $$;
 alter table public.platform_super_admin_emails enable row level security;
 alter table public.accounts enable row level security;
 alter table public.account_users enable row level security;
+alter table public.plan_pricing enable row level security;
 alter table public.clients enable row level security;
 alter table public.appointments enable row level security;
 alter table public.proposals enable row level security;
@@ -478,6 +504,14 @@ alter table public.email_events enable row level security;
 drop policy if exists "Super admins can manage platform admin emails" on public.platform_super_admin_emails;
 create policy "Super admins can manage platform admin emails"
 on public.platform_super_admin_emails
+for all
+to authenticated
+using (public.is_platform_super_admin())
+with check (public.is_platform_super_admin());
+
+drop policy if exists "Super admins can manage plan pricing" on public.plan_pricing;
+create policy "Super admins can manage plan pricing"
+on public.plan_pricing
 for all
 to authenticated
 using (public.is_platform_super_admin())
@@ -645,6 +679,7 @@ create index if not exists accounts_owner_user_idx on public.accounts (owner_use
 create index if not exists accounts_plan_status_idx on public.accounts (plan, subscription_status, status);
 create index if not exists account_users_account_role_idx on public.account_users (account_id, role);
 create index if not exists account_users_email_idx on public.account_users (email);
+create index if not exists plan_pricing_updated_idx on public.plan_pricing (updated_at desc);
 create index if not exists clients_account_status_idx on public.clients (account_id, status);
 create index if not exists appointments_account_scheduled_idx on public.appointments (account_id, scheduled_at);
 create index if not exists proposals_account_status_idx on public.proposals (account_id, status);
@@ -657,6 +692,7 @@ create index if not exists gmail_send_logs_account_created_idx on public.gmail_s
 
 grant select, update on public.accounts to authenticated;
 grant select, insert, update, delete on public.account_users to authenticated;
+grant select, insert, update, delete on public.plan_pricing to authenticated;
 grant select, insert, update, delete on public.clients to authenticated;
 grant select, insert, update, delete on public.appointments to authenticated;
 grant select, insert, update, delete on public.proposals to authenticated;

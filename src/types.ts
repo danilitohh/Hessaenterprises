@@ -38,6 +38,16 @@ export type AccountRecord = {
   updatedAt: string
 }
 
+export type PlanPricingRecord = {
+  plan: AccountPlan
+  currency: string
+  monthlyPriceCents: number
+  annualPriceCents: number
+  discountPercent: number
+  isComingSoon: boolean
+  updatedAt: string
+}
+
 export type AccountUserRecord = {
   accountId: string
   email: string
@@ -176,6 +186,7 @@ export type AdminMetrics = {
 export type AdminPlatformState = {
   accounts: AdminAccountSummary[]
   metrics: AdminMetrics
+  planPricing: PlanPricingRecord[]
 }
 
 export type ProcessResult = {
