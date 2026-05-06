@@ -247,6 +247,26 @@ function countRowsByAccount(rows: Array<Record<string, unknown>>) {
   }, new Map<string, number>())
 }
 
+function getMetadataNumber(row: Record<string, unknown>, key: string) {
+  const metadata =
+    row.metadata && typeof row.metadata === 'object'
+      ? (row.metadata as Record<string, unknown>)
+      : null
+  const value = metadata ? metadata[key] : 0
+  const numericValue = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : 0
+}
+
+function sumMetadataByAccount(rows: Array<Record<string, unknown>>, key: string) {
+  return rows.reduce((counts, row) => {
+    if (typeof row.account_id === 'string') {
+      counts.set(row.account_id, (counts.get(row.account_id) ?? 0) + getMetadataNumber(row, key))
+    }
+
+    return counts
+  }, new Map<string, number>())
+}
+
 Deno.serve(async (req) => {
   const optionsResponse = handleOptions(req)
 
@@ -273,6 +293,7 @@ Deno.serve(async (req) => {
       accountRows,
       accountUserRows,
       planPricingRows,
+      clientRows,
       appointmentRows,
       proposalRows,
       emailEventRows,
@@ -282,6 +303,7 @@ Deno.serve(async (req) => {
       selectRows(supabase, 'accounts'),
       selectRows(supabase, 'account_users'),
       selectRows(supabase, 'plan_pricing'),
+      selectRows(supabase, 'clients'),
       selectRows(supabase, 'appointments'),
       selectRows(supabase, 'proposals'),
       selectRows(supabase, 'email_events'),
@@ -315,17 +337,25 @@ Deno.serve(async (req) => {
         userId: user.id,
       }
     })
+    const clientCounts = countRowsByAccount(clientRows)
     const appointmentCounts = countRowsByAccount(appointmentRows)
     const proposalCounts = countRowsByAccount(proposalRows)
-    const emailCounts = countRowsByAccount([...emailEventRows, ...gmailSendRows])
+    const eventEmailCounts = countRowsByAccount([...emailEventRows, ...gmailSendRows])
+    const clientEmailCounts = sumMetadataByAccount(clientRows, 'sent_contacts')
+    const proposalEmailCounts = sumMetadataByAccount(proposalRows, 'sent_follow_ups')
     const accounts = Array.from(accountsById.values()).map((account) => {
       const accountUsers = users.filter((user) => user.accountId === account.id)
+      const trackedEmailCount =
+        (clientEmailCounts.get(account.id) ?? 0) + (proposalEmailCounts.get(account.id) ?? 0)
 
       return {
         ...account,
         activeUsers: accountUsers.length,
-        appointmentCount: appointmentCounts.get(account.id) ?? 0,
-        emailCount: emailCounts.get(account.id) ?? 0,
+        appointmentCount: Math.max(
+          clientCounts.get(account.id) ?? 0,
+          appointmentCounts.get(account.id) ?? 0,
+        ),
+        emailCount: Math.max(eventEmailCounts.get(account.id) ?? 0, trackedEmailCount),
         proposalCount: proposalCounts.get(account.id) ?? 0,
         users: accountUsers,
       }

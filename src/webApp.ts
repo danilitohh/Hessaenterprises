@@ -8,6 +8,7 @@ import type {
   AccountRecord,
   AccountStatus,
   AccountUserRecord,
+  AdminAccountSummary,
   AdminPlatformState,
   ClientInput,
   ClientRecord,
@@ -33,11 +34,14 @@ const LEGACY_STORAGE_KEY = 'hessa-followup-web'
 const PLATFORM_STORAGE_KEY = 'hessa-followup-web:platform'
 const ACCOUNT_STORAGE_PREFIX = 'hessa-followup-web:account:'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
+const WORKSPACE_SYNC_SOURCE = 'workspace-local'
 const DEFAULT_SUPER_ADMIN_EMAILS = ['kevin.hessam@gmail.com', 'danilitohhh@gmail.com']
 const DEFAULT_TRY_COUNT = 4
 const MAX_SEQUENCE_TRIES = 100
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
 const BILLING_PLAN_OPTIONS: AccountPlan[] = ['free', 'basic', 'pro', 'business']
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const statusPriority = {
   active: 0,
   finished: 1,
@@ -192,6 +196,15 @@ function createId() {
   }
 
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function isUuid(value: string) {
+  return UUID_PATTERN.test(value)
+}
+
+function toNullableText(value: string) {
+  const normalized = value.trim()
+  return normalized || null
 }
 
 function withDatabaseAccountId(database: Database, accountId: string) {
@@ -688,15 +701,6 @@ function toPublicUser(
   }
 }
 
-function toTenantSession(user: User | null | undefined): AuthSession | null {
-  if (!user) {
-    return null
-  }
-
-  const { membership } = ensurePlatformMembership(user)
-  return { user: toPublicUser(user, membership) }
-}
-
 function createAccountId(userId: string) {
   return `account-${userId}`
 }
@@ -977,8 +981,82 @@ function loadDatabaseForAccount(accountId: string) {
   return loadDatabaseByKey(getAccountStorageKey(accountId), accountId)
 }
 
+function hasStoredDatabaseForAccount(accountId: string) {
+  return window.localStorage.getItem(getAccountStorageKey(accountId)) !== null
+}
+
 function saveDatabaseForAccount(accountId: string, database: Database) {
   return saveDatabaseByKey(getAccountStorageKey(accountId), database, accountId)
+}
+
+function migrateAccountDatabase(sourceAccountId: string, targetAccountId: string) {
+  if (!sourceAccountId || sourceAccountId === targetAccountId) {
+    return
+  }
+
+  const sourceKey = getAccountStorageKey(sourceAccountId)
+  const targetKey = getAccountStorageKey(targetAccountId)
+  const source = window.localStorage.getItem(sourceKey)
+  const target = window.localStorage.getItem(targetKey)
+
+  if (!source) {
+    return
+  }
+
+  try {
+    const sourceDatabase = normalizeDatabase(JSON.parse(source), targetAccountId)
+
+    if (target) {
+      const targetDatabase = normalizeDatabase(JSON.parse(target), targetAccountId)
+      const targetHasWorkspaceData =
+        targetDatabase.clients.length > 0 || targetDatabase.proposals.length > 0
+      const sourceHasWorkspaceData =
+        sourceDatabase.clients.length > 0 || sourceDatabase.proposals.length > 0
+
+      if (targetHasWorkspaceData || !sourceHasWorkspaceData) {
+        return
+      }
+    }
+
+    window.localStorage.setItem(targetKey, JSON.stringify(sourceDatabase))
+  } catch {
+    window.localStorage.removeItem(sourceKey)
+  }
+}
+
+function savePlatformSupabaseContext(account: AccountRecord, membership: AccountUserRecord) {
+  const platform = loadPlatformRegistry()
+  const userIndex = platform.users.findIndex((user) => user.userId === membership.userId)
+  const previousAccountId = userIndex >= 0 ? platform.users[userIndex].accountId : ''
+  const normalizedMembership = {
+    ...membership,
+    role: isSuperAdminEmail(membership.email) ? 'super_admin' : membership.role,
+  }
+
+  if (userIndex >= 0) {
+    platform.users[userIndex] = normalizedMembership
+  } else {
+    platform.users.push(normalizedMembership)
+  }
+
+  const accountIndex = platform.accounts.findIndex((item) => item.id === account.id)
+
+  if (accountIndex >= 0) {
+    platform.accounts[accountIndex] = account
+  } else {
+    platform.accounts.push(account)
+  }
+
+  if (
+    previousAccountId &&
+    previousAccountId !== account.id &&
+    !platform.users.some((user) => user.accountId === previousAccountId)
+  ) {
+    platform.accounts = platform.accounts.filter((item) => item.id !== previousAccountId)
+  }
+
+  savePlatformRegistry(platform)
+  migrateAccountDatabase(previousAccountId, account.id)
 }
 
 function ensurePlatformMembership(user: User) {
@@ -1045,6 +1123,81 @@ function ensurePlatformMembership(user: User) {
   }
 }
 
+async function getSupabaseAccountContext(user: User) {
+  const supabase = getSupabaseClient()
+  const { data: membershipRow, error: membershipError } = await supabase
+    .from('account_users')
+    .select('*')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle()
+
+  if (membershipError) {
+    if (isSupabaseSchemaUnavailable(membershipError)) {
+      return null
+    }
+
+    throw new Error(membershipError.message)
+  }
+
+  if (!membershipRow) {
+    return null
+  }
+
+  const membership = mapSupabaseAccountUser(membershipRow)
+
+  if (isSuperAdminEmail(membership.email)) {
+    membership.role = 'super_admin'
+  }
+
+  const { data: accountRow, error: accountError } = await supabase
+    .from('accounts')
+    .select('*')
+    .eq('id', membership.accountId)
+    .maybeSingle()
+
+  if (accountError) {
+    if (isSupabaseSchemaUnavailable(accountError)) {
+      return null
+    }
+
+    throw new Error(accountError.message)
+  }
+
+  if (!accountRow) {
+    return null
+  }
+
+  const account = mapSupabaseAccount(accountRow)
+  savePlatformSupabaseContext(account, membership)
+  migrateLegacyWorkspaceToAccount(user.id, account.id)
+
+  return {
+    account,
+    membership,
+    platform: loadPlatformRegistry(),
+  }
+}
+
+async function resolveTenantContext(user: User) {
+  const localContext = ensurePlatformMembership(user)
+
+  try {
+    return (await getSupabaseAccountContext(user)) ?? localContext
+  } catch {
+    return localContext
+  }
+}
+
+async function createTenantSession(user: User | null | undefined): Promise<AuthSession | null> {
+  if (!user) {
+    return null
+  }
+
+  const { membership } = await resolveTenantContext(user)
+  return { user: toPublicUser(user, membership) }
+}
+
 function getUnknownErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
@@ -1097,7 +1250,7 @@ async function getVerifiedUserWithCacheFallback() {
 
 async function requireSession() {
   const user = await getVerifiedUserWithCacheFallback()
-  const context = user ? ensurePlatformMembership(user) : null
+  const context = user ? await resolveTenantContext(user) : null
   const session = user ? { user: toPublicUser(user, context?.membership) } : null
 
   if (!session) {
@@ -1569,10 +1722,215 @@ function getAppStateFromDatabase(
   }
 }
 
+type SupabaseWorkspaceRow = Record<string, unknown> & {
+  account_id: string
+  id: string
+  metadata: Record<string, unknown>
+}
+
+type SupabaseStoredWorkspaceRow = {
+  id?: unknown
+  metadata?: unknown
+}
+
+function isWorkspaceSyncedRow(row: SupabaseStoredWorkspaceRow) {
+  const metadata =
+    row.metadata && typeof row.metadata === 'object'
+      ? (row.metadata as Record<string, unknown>)
+      : null
+
+  return metadata?.source === WORKSPACE_SYNC_SOURCE || typeof metadata?.local_id === 'string'
+}
+
+function buildClientSyncRow(client: ClientRecord, createdByUserId: string): SupabaseWorkspaceRow {
+  return {
+    account_id: client.accountId,
+    company: toNullableText(client.company),
+    created_at: client.createdAt,
+    created_by: isUuid(createdByUserId) ? createdByUserId : null,
+    email: toNullableText(client.email),
+    id: client.id,
+    metadata: {
+      canceled_at: client.canceledAt,
+      contact_schedule_times: client.contactScheduleTimes,
+      finished_at: client.finishedAt,
+      history: client.history,
+      last_contact_at: client.lastContactAt,
+      last_error: client.lastError,
+      local_id: client.id,
+      next_contact_at: client.nextContactAt,
+      sent_contacts: client.sentContacts,
+      source: WORKSPACE_SYNC_SOURCE,
+      target_contacts: client.targetContacts,
+    },
+    name: client.name,
+    notes: toNullableText(client.notes),
+    status: client.status,
+    updated_at: client.updatedAt,
+  }
+}
+
+function buildProposalSyncRow(
+  proposal: ProposalRecord,
+  createdByUserId: string,
+): SupabaseWorkspaceRow {
+  return {
+    account_id: proposal.accountId,
+    created_at: proposal.createdAt,
+    created_by: isUuid(createdByUserId) ? createdByUserId : null,
+    currency: 'USD',
+    id: proposal.id,
+    metadata: {
+      canceled_at: proposal.canceledAt,
+      client_name: proposal.clientName,
+      company: proposal.company,
+      email: proposal.email,
+      finished_at: proposal.finishedAt,
+      follow_up_schedule_times: proposal.followUpScheduleTimes,
+      history: proposal.history,
+      last_error: proposal.lastError,
+      last_follow_up_at: proposal.lastFollowUpAt,
+      local_id: proposal.id,
+      notes: proposal.notes,
+      sent_follow_ups: proposal.sentFollowUps,
+      source: WORKSPACE_SYNC_SOURCE,
+      target_follow_ups: proposal.targetFollowUps,
+    },
+    next_follow_up_at: proposal.nextFollowUpAt,
+    sent_at: proposal.lastFollowUpAt,
+    status: proposal.status,
+    title:
+      proposal.clientName ||
+      proposal.company ||
+      proposal.email ||
+      'Proposal follow-up',
+    updated_at: proposal.updatedAt,
+    value: 0,
+  }
+}
+
+async function syncWorkspaceTableRows(
+  tableName: 'clients' | 'proposals',
+  accountId: string,
+  rows: SupabaseWorkspaceRow[],
+) {
+  const supabase = getSupabaseClient()
+
+  if (rows.length > 0) {
+    const { error: upsertError } = await supabase.from(tableName).upsert(rows, {
+      onConflict: 'id',
+    })
+
+    if (upsertError) {
+      if (isSupabaseSchemaUnavailable(upsertError)) {
+        return false
+      }
+
+      return false
+    }
+  }
+
+  const { data: storedRows, error: storedRowsError } = await supabase
+    .from(tableName)
+    .select('id,metadata')
+    .eq('account_id', accountId)
+
+  if (storedRowsError) {
+    if (isSupabaseSchemaUnavailable(storedRowsError)) {
+      return false
+    }
+
+    return false
+  }
+
+  const syncedIds = new Set(rows.map((row) => row.id))
+  const staleIds = ((storedRows ?? []) as SupabaseStoredWorkspaceRow[])
+    .filter((row) => typeof row.id === 'string' && isWorkspaceSyncedRow(row) && !syncedIds.has(row.id))
+    .map((row) => row.id as string)
+
+  if (staleIds.length === 0) {
+    return true
+  }
+
+  const { error: deleteError } = await supabase
+    .from(tableName)
+    .delete()
+    .eq('account_id', accountId)
+    .in('id', staleIds)
+
+  if (deleteError) {
+    if (isSupabaseSchemaUnavailable(deleteError)) {
+      return false
+    }
+
+    return false
+  }
+
+  return true
+}
+
+async function syncWorkspaceDatabaseToSupabase(
+  account: AccountRecord,
+  createdByUserId: string,
+  database: Database,
+) {
+  try {
+    if (!isUuid(account.id)) {
+      return false
+    }
+
+    const clientRows = database.clients
+      .filter((client) => isUuid(client.id))
+      .map((client) => buildClientSyncRow(client, createdByUserId))
+    const proposalRows = database.proposals
+      .filter((proposal) => isUuid(proposal.id))
+      .map((proposal) => buildProposalSyncRow(proposal, createdByUserId))
+    const [clientsSynced, proposalsSynced] = await Promise.all([
+      syncWorkspaceTableRows('clients', account.id, clientRows),
+      syncWorkspaceTableRows('proposals', account.id, proposalRows),
+    ])
+
+    return clientsSynced && proposalsSynced
+  } catch {
+    return false
+  }
+}
+
 function persistDatabase(accountId: string, database: Database) {
   database.clients = sortClients(database.clients)
   database.proposals = sortProposals(database.proposals)
   return saveDatabaseForAccount(accountId, database)
+}
+
+async function persistWorkspaceDatabase(
+  account: AccountRecord,
+  currentUser: AuthUser,
+  database: Database,
+) {
+  const persisted = persistDatabase(account.id, database)
+  await syncWorkspaceDatabaseToSupabase(account, currentUser.id, persisted)
+  return persisted
+}
+
+async function syncLocalPlatformDatabasesToSupabase(createdByUserId: string) {
+  const platform = loadPlatformRegistry()
+
+  await Promise.all(
+    platform.accounts.map(async (account) => {
+      const stored = window.localStorage.getItem(getAccountStorageKey(account.id))
+
+      if (!stored) {
+        return false
+      }
+
+      try {
+        const database = normalizeDatabase(JSON.parse(stored), account.id)
+        return syncWorkspaceDatabaseToSupabase(account, createdByUserId, database)
+      } catch {
+        return false
+      }
+    }),
+  )
 }
 
 function mergeSettings(
@@ -1998,6 +2356,29 @@ function countRowsByAccount(rows: Array<{ account_id?: unknown }>) {
   }, new Map<string, number>())
 }
 
+function getMetadataNumber(row: { metadata?: unknown }, key: string) {
+  const metadata =
+    row.metadata && typeof row.metadata === 'object'
+      ? (row.metadata as Record<string, unknown>)
+      : null
+  const value = metadata ? metadata[key] : 0
+  const numericValue = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : 0
+}
+
+function sumMetadataByAccount(
+  rows: Array<{ account_id?: unknown; metadata?: unknown }>,
+  key: string,
+) {
+  return rows.reduce((counts, row) => {
+    if (typeof row.account_id === 'string') {
+      counts.set(row.account_id, (counts.get(row.account_id) ?? 0) + getMetadataNumber(row, key))
+    }
+
+    return counts
+  }, new Map<string, number>())
+}
+
 async function selectAccountIdRows(tableName: string) {
   const supabase = getSupabaseClient()
   const { data, error } = await supabase.from(tableName).select('account_id')
@@ -2011,6 +2392,21 @@ async function selectAccountIdRows(tableName: string) {
   }
 
   return (data ?? []) as Array<{ account_id?: unknown }>
+}
+
+async function selectAccountMetricRows(tableName: string) {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase.from(tableName).select('account_id,metadata')
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return []
+    }
+
+    throw new Error(error.message)
+  }
+
+  return (data ?? []) as Array<{ account_id?: unknown; metadata?: unknown }>
 }
 
 async function getAdminPlatformStateFromSupabase() {
@@ -2049,19 +2445,24 @@ async function getAdminPlatformStateFromSupabase() {
   }
 
   const [
+    clientRows,
     appointmentRows,
     proposalRows,
     emailEventRows,
     gmailSendLogRows,
   ] = await Promise.all([
+    selectAccountMetricRows('clients'),
     selectAccountIdRows('appointments'),
-    selectAccountIdRows('proposals'),
+    selectAccountMetricRows('proposals'),
     selectAccountIdRows('email_events'),
     selectAccountIdRows('gmail_send_logs'),
   ])
+  const clientCounts = countRowsByAccount(clientRows)
   const appointmentCounts = countRowsByAccount(appointmentRows)
   const proposalCounts = countRowsByAccount(proposalRows)
   const emailEventCounts = countRowsByAccount([...emailEventRows, ...gmailSendLogRows])
+  const clientEmailCounts = sumMetadataByAccount(clientRows, 'sent_contacts')
+  const proposalEmailCounts = sumMetadataByAccount(proposalRows, 'sent_follow_ups')
   const users = (userRows ?? []).map(mapSupabaseAccountUser)
   const planPricing = normalizePlanPricingList(
     pricingError ? [] : (pricingRows ?? []).map(mapSupabasePlanPricing),
@@ -2069,12 +2470,17 @@ async function getAdminPlatformStateFromSupabase() {
   const accounts = (accountRows ?? []).map((rawAccount) => {
     const account = mapSupabaseAccount(rawAccount)
     const accountUsers = users.filter((user) => user.accountId === account.id)
+    const trackedEmailCount =
+      (clientEmailCounts.get(account.id) ?? 0) + (proposalEmailCounts.get(account.id) ?? 0)
 
     return {
       ...account,
       activeUsers: accountUsers.length,
-      appointmentCount: appointmentCounts.get(account.id) ?? 0,
-      emailCount: emailEventCounts.get(account.id) ?? 0,
+      appointmentCount: Math.max(
+        clientCounts.get(account.id) ?? 0,
+        appointmentCounts.get(account.id) ?? 0,
+      ),
+      emailCount: Math.max(emailEventCounts.get(account.id) ?? 0, trackedEmailCount),
       proposalCount: proposalCounts.get(account.id) ?? 0,
       users: accountUsers,
     }
@@ -2142,14 +2548,108 @@ async function getAdminPlatformStateFromEdge() {
   return data ?? null
 }
 
-async function getBestAdminPlatformState() {
-  const edgeState = await getAdminPlatformStateFromEdge()
+function calculateAdminMetrics(accounts: AdminAccountSummary[]): AdminPlatformState['metrics'] {
+  return accounts.reduce(
+    (summary, account) => {
+      summary.totalAccounts += 1
+      summary.totalUsers += account.users.length
+      summary.appointmentCount += account.appointmentCount
+      summary.proposalCount += account.proposalCount
+      summary.emailCount += account.emailCount
 
-  if (edgeState) {
-    return edgeState
+      if (account.status === 'suspended' || account.subscriptionStatus === 'suspended') {
+        summary.suspendedAccounts += 1
+      } else {
+        summary.activeAccounts += 1
+      }
+
+      return summary
+    },
+    {
+      activeAccounts: 0,
+      appointmentCount: 0,
+      emailCount: 0,
+      proposalCount: 0,
+      suspendedAccounts: 0,
+      totalAccounts: 0,
+      totalUsers: 0,
+    },
+  )
+}
+
+function mergeAccountUsers(
+  primaryUsers: AccountUserRecord[],
+  localUsers: AccountUserRecord[],
+) {
+  const usersById = new Map(primaryUsers.map((user) => [user.userId, user]))
+
+  for (const user of localUsers) {
+    if (!usersById.has(user.userId)) {
+      usersById.set(user.userId, user)
+    }
+  }
+
+  return Array.from(usersById.values())
+}
+
+function mergeAdminPlatformStates(
+  primaryState: AdminPlatformState,
+  localState: AdminPlatformState,
+): AdminPlatformState {
+  const localAccountsById = new Map(localState.accounts.map((account) => [account.id, account]))
+  const localAccountsByOwnerId = new Map(
+    localState.accounts
+      .filter((account) => account.ownerUserId)
+      .map((account) => [account.ownerUserId, account]),
+  )
+  const mergedLocalAccountIds = new Set<string>()
+  const accounts = primaryState.accounts.map((account) => {
+    const localAccount =
+      localAccountsById.get(account.id) ?? localAccountsByOwnerId.get(account.ownerUserId)
+
+    if (!localAccount) {
+      return account
+    }
+
+    mergedLocalAccountIds.add(localAccount.id)
+    const users = mergeAccountUsers(account.users, localAccount.users)
+
+    return {
+      ...account,
+      activeUsers: Math.max(account.activeUsers, localAccount.activeUsers),
+      appointmentCount: Math.max(account.appointmentCount, localAccount.appointmentCount),
+      emailCount: Math.max(account.emailCount, localAccount.emailCount),
+      proposalCount: Math.max(account.proposalCount, localAccount.proposalCount),
+      users,
+    }
+  })
+  const primaryAccountIds = new Set(accounts.map((account) => account.id))
+
+  for (const localAccount of localState.accounts) {
+    if (!primaryAccountIds.has(localAccount.id) && !mergedLocalAccountIds.has(localAccount.id)) {
+      accounts.push(localAccount)
+    }
+  }
+
+  return {
+    accounts,
+    metrics: calculateAdminMetrics(accounts),
+    planPricing: primaryState.planPricing.length ? primaryState.planPricing : localState.planPricing,
+  }
+}
+
+async function getBestAdminPlatformState(createdByUserId?: string) {
+  if (createdByUserId) {
+    await syncLocalPlatformDatabasesToSupabase(createdByUserId)
   }
 
   const localState = getAdminPlatformState()
+  const edgeState = await getAdminPlatformStateFromEdge()
+
+  if (edgeState) {
+    return mergeAdminPlatformStates(edgeState, localState)
+  }
+
   const supabaseState = await getAdminPlatformStateFromSupabase()
 
   if (!supabaseState) {
@@ -2157,7 +2657,7 @@ async function getBestAdminPlatformState() {
   }
 
   if (supabaseState.accounts.length > 0 || localState.accounts.length === 0) {
-    return supabaseState
+    return mergeAdminPlatformStates(supabaseState, localState)
   }
 
   return {
@@ -2260,7 +2760,7 @@ export const webApp = {
       throw new Error(error.message)
     }
 
-    return toTenantSession(data.session?.user)
+    return createTenantSession(data.session?.user)
   },
 
   async register(registerInput: RegisterInput): Promise<AuthActionResult> {
@@ -2297,7 +2797,7 @@ export const webApp = {
       throw new Error(error.message)
     }
 
-    const nextSession = toTenantSession(data.session?.user)
+    const nextSession = await createTenantSession(data.session?.user)
 
     return {
       message: nextSession
@@ -2329,7 +2829,7 @@ export const webApp = {
       throw new Error(error.message)
     }
 
-    const nextSession = toTenantSession(data.user)
+    const nextSession = await createTenantSession(data.user)
 
     return {
       message: 'Signed in successfully.',
@@ -2386,7 +2886,7 @@ export const webApp = {
 
     return {
       message: 'Password updated successfully.',
-      session: toTenantSession(data.user),
+      session: await createTenantSession(data.user),
     }
   },
 
@@ -2401,16 +2901,23 @@ export const webApp = {
 
   async getAppState() {
     const { account, session } = await requireWorkspaceContext()
-    return getAppStateFromDatabase(loadDatabaseForAccount(account.id), session.user, account)
+    const hasStoredDatabase = hasStoredDatabaseForAccount(account.id)
+    const database = loadDatabaseForAccount(account.id)
+
+    if (hasStoredDatabase) {
+      await syncWorkspaceDatabaseToSupabase(account, session.user.id, database)
+    }
+
+    return getAppStateFromDatabase(database, session.user, account)
   },
 
   async getAdminState() {
-    await requireSuperAdminContext()
-    return getBestAdminPlatformState()
+    const { session } = await requireSuperAdminContext()
+    return getBestAdminPlatformState(session.user.id)
   },
 
   async updateAccountPlan(accountId: string, plan: AccountPlan) {
-    await requireSuperAdminContext()
+    const { session } = await requireSuperAdminContext()
     const normalizedPlan = normalizePlan(plan)
     const planPatch: Parameters<typeof updateSupabaseAccount>[1] = {
       plan: normalizedPlan,
@@ -2424,7 +2931,7 @@ export const webApp = {
     const updatedInSupabase = await updateSupabaseAccount(accountId, planPatch)
 
     if (updatedInSupabase) {
-      return getBestAdminPlatformState()
+      return getBestAdminPlatformState(session.user.id)
     }
 
     updatePlatformAccount(accountId, (account) => ({
@@ -2441,7 +2948,7 @@ export const webApp = {
   },
 
   async updateAccountStatus(accountId: string, status: AccountStatus) {
-    await requireSuperAdminContext()
+    const { session } = await requireSuperAdminContext()
     const normalizedStatus = normalizeAccountStatus(status)
     const currentAdminState = await getAdminPlatformStateFromSupabase()
     const currentAccount = currentAdminState?.accounts.find((account) => account.id === accountId)
@@ -2457,7 +2964,7 @@ export const webApp = {
     })
 
     if (updatedInSupabase) {
-      return getBestAdminPlatformState()
+      return getBestAdminPlatformState(session.user.id)
     }
 
     updatePlatformAccount(accountId, (account) => ({
@@ -2478,7 +2985,7 @@ export const webApp = {
   },
 
   async updatePlanPricing(pricingInput: PlanPricingRecord) {
-    await requireSuperAdminContext()
+    const { session } = await requireSuperAdminContext()
     const pricing = {
       ...normalizePlanPricing(pricingInput),
       updatedAt: new Date().toISOString(),
@@ -2486,7 +2993,7 @@ export const webApp = {
     const updatedInSupabase = await updateSupabasePlanPricing(pricing)
 
     if (updatedInSupabase) {
-      return getBestAdminPlatformState()
+      return getBestAdminPlatformState(session.user.id)
     }
 
     updatePlatformPlanPricing(pricing.plan, () => pricing)
@@ -2498,7 +3005,7 @@ export const webApp = {
     const { account, session } = await requireWorkspaceContext()
     const database = loadDatabaseForAccount(account.id)
     database.settings = mergeSettings(database.settings, incomingSettings, account.id)
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return {
       ...getAppStateFromDatabase(persisted, session.user, account),
@@ -2569,7 +3076,7 @@ export const webApp = {
     )
 
     database.clients.unshift(client)
-    persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     const shouldAutoOpen =
       database.settings.automation.autoOpenDraftOnCreate &&
@@ -2581,7 +3088,7 @@ export const webApp = {
     }
 
     return {
-      ...getAppStateFromDatabase(loadDatabaseForAccount(account.id), session.user, account),
+      ...getAppStateFromDatabase(persisted, session.user, account),
       result: {
         failed: 0,
         message: `Client added. First draft scheduled for ${toDateLabel(client.nextContactAt)}.`,
@@ -2653,7 +3160,7 @@ export const webApp = {
     proposal.nextFollowUpAt = firstFollowUpAt
 
     database.proposals.unshift(proposal)
-    persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     const shouldAutoOpen =
       database.settings.automation.autoOpenDraftOnCreate &&
@@ -2665,7 +3172,7 @@ export const webApp = {
     }
 
     return {
-      ...getAppStateFromDatabase(loadDatabaseForAccount(account.id), session.user, account),
+      ...getAppStateFromDatabase(persisted, session.user, account),
       result: {
         failed: 0,
         message: `Proposal follow-up added. First email scheduled for ${toDateLabel(firstFollowUpAt)}.`,
@@ -2699,7 +3206,7 @@ export const webApp = {
     }
 
     const delivery = await advanceClientWithDraft(database, client, options)
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
     const remainingDue = selectClientsForProcessing(persisted.clients).length
     const suffix =
       remainingDue > 0
@@ -2738,7 +3245,7 @@ export const webApp = {
     }
 
     const delivery = await advanceProposalWithDraft(database, proposal, options)
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
     const remainingDue = selectProposalsForProcessing(persisted.proposals).length
     const suffix =
       remainingDue > 0 ? ` ${remainingDue} more proposal follow-ups are still due.` : ''
@@ -2773,7 +3280,7 @@ export const webApp = {
     }
 
     const delivery = await advanceClientWithDraft(database, client, options)
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return buildOperationResponse(
       persisted,
@@ -2805,7 +3312,7 @@ export const webApp = {
     }
 
     const delivery = await advanceProposalWithDraft(database, proposal, options)
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return buildOperationResponse(
       persisted,
@@ -2849,7 +3356,7 @@ export const webApp = {
       client.nextContactAt = null
     }
 
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return {
       ...getAppStateFromDatabase(persisted, session.user, account),
@@ -2900,7 +3407,7 @@ export const webApp = {
       proposal.nextFollowUpAt = null
     }
 
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return {
       ...getAppStateFromDatabase(persisted, session.user, account),
@@ -2930,7 +3437,7 @@ export const webApp = {
     }
 
     database.clients.splice(clientIndex, 1)
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return {
       ...getAppStateFromDatabase(persisted, session.user, account),
@@ -2957,7 +3464,7 @@ export const webApp = {
     }
 
     database.proposals.splice(proposalIndex, 1)
-    const persisted = persistDatabase(account.id, database)
+    const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return {
       ...getAppStateFromDatabase(persisted, session.user, account),
