@@ -10,6 +10,7 @@ The frontend never stores Google secrets or refresh tokens. Tokens are handled o
 - Gmail connection status via Supabase Edge Functions.
 - Optional automatic sending in the existing follow-up buttons.
 - Safe fallback to the current `mailto:` draft flow when Gmail is not connected or functions are not deployed.
+- Background follow-up sending through a scheduled Vercel cron endpoint and the `gmail-process-followups` Supabase function.
 - Supabase SQL migration for Gmail connections, OAuth state, and send logs.
 - Supabase Edge Functions:
   - `gmail-oauth-start`
@@ -17,6 +18,7 @@ The frontend never stores Google secrets or refresh tokens. Tokens are handled o
   - `gmail-status`
   - `gmail-disconnect`
   - `gmail-send-followup`
+  - `gmail-process-followups`
 
 ## Google Cloud Setup
 
@@ -65,6 +67,7 @@ supabase secrets set \
   GOOGLE_OAUTH_CLIENT_ID="your-google-client-id.apps.googleusercontent.com" \
   GOOGLE_OAUTH_CLIENT_SECRET="your-google-client-secret" \
   GMAIL_TOKEN_ENCRYPTION_KEY="generate-a-long-random-secret" \
+  CRON_SECRET="generate-another-long-random-secret" \
   APP_ORIGIN="https://hessaenterprises.vercel.app"
 ```
 
@@ -92,9 +95,26 @@ supabase functions deploy gmail-oauth-callback
 supabase functions deploy gmail-status
 supabase functions deploy gmail-disconnect
 supabase functions deploy gmail-send-followup
+supabase functions deploy gmail-process-followups
 ```
 
-The callback function has `verify_jwt = false` in `supabase/config.toml` because Google redirects to it without a Supabase session header. It still validates the signed-in user through the stored OAuth `state`.
+The callback and cron processing functions have `verify_jwt = false` in `supabase/config.toml`. The callback validates the signed-in user through the stored OAuth `state`; `gmail-process-followups` validates the `Authorization: Bearer $CRON_SECRET` header before doing any work.
+
+## Vercel Cron Setup
+
+Set the same cron secret in Vercel:
+
+```bash
+vercel env add CRON_SECRET production
+```
+
+Optional:
+
+```bash
+vercel env add GMAIL_CRON_MAX_PER_RUN production
+```
+
+`vercel.json` calls `/api/cron/gmail-followups` every hour. That endpoint validates `CRON_SECRET` and then calls `gmail-process-followups`. Vercel Cron Jobs run on production deployments only. If the project is on Vercel Hobby, hourly cron may require changing the schedule to daily or using another scheduler.
 
 ## How The User Flow Works
 
@@ -106,6 +126,7 @@ The callback function has `verify_jwt = false` in `supabase/config.toml` because
 6. The dashboard shows the connected Gmail account.
 7. Existing follow-up buttons try Gmail API first.
 8. If Gmail is not connected, the app still opens the existing browser email draft.
+9. The backend cron sends due appointment and proposal follow-ups from the connected Gmail account even when the dashboard is closed.
 
 ## Important Notes
 

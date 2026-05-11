@@ -122,14 +122,17 @@ Tokens disponibles dentro de la plantilla:
 
 1. Se crea un cliente.
 2. La app deja listo el contacto 1 para su horario programado.
-3. Cuando abres el borrador de un intento, se agenda el siguiente contacto.
-4. Cuando se completan todos los intentos, el cliente pasa a estado `finalizado`.
+3. Si Gmail esta conectado, el boton manual envia el correo desde Gmail; si no lo esta, abre un borrador con `mailto:`.
+4. En produccion, el cron `/api/cron/gmail-followups` llama la funcion `gmail-process-followups` para enviar los seguimientos vencidos aunque el dashboard este cerrado.
+5. Cuando se completan todos los intentos, el cliente pasa a estado `finalizado`.
 
-## Alcance actual
+## Envio automatico en segundo plano
 
-- Esta version no envia correos automaticamente desde un servidor.
-- Los borradores se abren usando `mailto:` en el cliente de correo del usuario.
-- Si luego quieres envio automatico real desde la web, necesitaremos agregar un backend o integrar un proveedor de correo.
+- Requiere que el usuario haya conectado Gmail una vez.
+- Requiere desplegar la funcion de Supabase `gmail-process-followups`.
+- Requiere configurar `CRON_SECRET` tanto en Vercel como en Supabase.
+- El cron de Vercel esta configurado cada hora (`0 * * * *`). En planes Hobby de Vercel puede que debas cambiarlo a una frecuencia diaria o usar un scheduler externo.
+- Si Gmail no esta conectado para el usuario dueno del seguimiento, el intento queda registrado como fallido y no se envia desde otra cuenta.
 
 ## Validacion realizada
 

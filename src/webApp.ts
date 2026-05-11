@@ -1733,6 +1733,26 @@ type SupabaseStoredWorkspaceRow = {
   metadata?: unknown
 }
 
+type SupabaseEmailTemplateRow = {
+  account_id: string
+  body: string
+  created_by: string | null
+  is_active: boolean
+  step_number: number
+  subject: string
+  template_type: 'appointment' | 'proposal'
+  title: string
+  updated_at: string
+}
+
+function getCurrentTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
 function isWorkspaceSyncedRow(row: SupabaseStoredWorkspaceRow) {
   const metadata =
     row.metadata && typeof row.metadata === 'object'
@@ -1742,7 +1762,20 @@ function isWorkspaceSyncedRow(row: SupabaseStoredWorkspaceRow) {
   return metadata?.source === WORKSPACE_SYNC_SOURCE || typeof metadata?.local_id === 'string'
 }
 
-function buildClientSyncRow(client: ClientRecord, createdByUserId: string): SupabaseWorkspaceRow {
+function getAutomationSyncMetadata(settings: SettingsState) {
+  return {
+    interval_days: settings.automation.intervalDays,
+    sender_from_email: settings.sender.fromEmail,
+    sender_from_name: settings.sender.fromName || 'Hessa Enterprises',
+    time_zone: getCurrentTimeZone(),
+  }
+}
+
+function buildClientSyncRow(
+  client: ClientRecord,
+  createdByUserId: string,
+  settings: SettingsState,
+): SupabaseWorkspaceRow {
   return {
     account_id: client.accountId,
     company: toNullableText(client.company),
@@ -1759,6 +1792,7 @@ function buildClientSyncRow(client: ClientRecord, createdByUserId: string): Supa
       last_error: client.lastError,
       local_id: client.id,
       next_contact_at: client.nextContactAt,
+      ...getAutomationSyncMetadata(settings),
       sent_contacts: client.sentContacts,
       source: WORKSPACE_SYNC_SOURCE,
       target_contacts: client.targetContacts,
@@ -1773,6 +1807,7 @@ function buildClientSyncRow(client: ClientRecord, createdByUserId: string): Supa
 function buildProposalSyncRow(
   proposal: ProposalRecord,
   createdByUserId: string,
+  settings: SettingsState,
 ): SupabaseWorkspaceRow {
   return {
     account_id: proposal.accountId,
@@ -1792,6 +1827,7 @@ function buildProposalSyncRow(
       last_follow_up_at: proposal.lastFollowUpAt,
       local_id: proposal.id,
       notes: proposal.notes,
+      ...getAutomationSyncMetadata(settings),
       sent_follow_ups: proposal.sentFollowUps,
       source: WORKSPACE_SYNC_SOURCE,
       target_follow_ups: proposal.targetFollowUps,
@@ -1869,6 +1905,255 @@ async function syncWorkspaceTableRows(
   return true
 }
 
+async function syncEmailTemplatesToSupabase(
+  accountId: string,
+  createdByUserId: string,
+  settings: SettingsState,
+) {
+  const supabase = getSupabaseClient()
+  const updatedAt = new Date().toISOString()
+  const createdBy = isUuid(createdByUserId) ? createdByUserId : null
+  const rows: SupabaseEmailTemplateRow[] = [
+    ...settings.templates.map((template, index) => ({
+      account_id: accountId,
+      body: template.body,
+      created_by: createdBy,
+      is_active: true,
+      step_number: index + 1,
+      subject: template.subject,
+      template_type: 'appointment' as const,
+      title: template.title || `Touchpoint ${index + 1}`,
+      updated_at: updatedAt,
+    })),
+    ...settings.proposalTemplates.map((template, index) => ({
+      account_id: accountId,
+      body: template.body,
+      created_by: createdBy,
+      is_active: true,
+      step_number: index + 1,
+      subject: template.subject,
+      template_type: 'proposal' as const,
+      title: template.title || `Proposal touchpoint ${index + 1}`,
+      updated_at: updatedAt,
+    })),
+  ]
+
+  if (rows.length === 0) {
+    return true
+  }
+
+  const { error } = await supabase.from('email_templates').upsert(rows, {
+    onConflict: 'account_id,template_type,step_number',
+  })
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return false
+    }
+
+    return false
+  }
+
+  return true
+}
+
+function mapSyncedClientRow(row: SupabaseWorkspaceRow): ClientRecord | null {
+  if (!isWorkspaceSyncedRow(row)) {
+    return null
+  }
+
+  const metadata =
+    row.metadata && typeof row.metadata === 'object'
+      ? (row.metadata as Record<string, unknown>)
+      : Object.create(null)
+  const accountId = typeof row.account_id === 'string' ? row.account_id : ''
+
+  if (!accountId) {
+    return null
+  }
+
+  return normalizeClient(
+    {
+      canceledAt: metadata.canceled_at,
+      company: row.company,
+      contactScheduleTimes: metadata.contact_schedule_times,
+      createdAt: row.created_at,
+      email: row.email,
+      finishedAt: metadata.finished_at,
+      history: metadata.history,
+      id: row.id,
+      lastContactAt: metadata.last_contact_at,
+      lastError: metadata.last_error,
+      name: row.name,
+      nextContactAt: metadata.next_contact_at,
+      notes: row.notes,
+      sentContacts: metadata.sent_contacts,
+      status: row.status,
+      targetContacts: metadata.target_contacts,
+      updatedAt: row.updated_at,
+    },
+    accountId,
+  )
+}
+
+function mapSyncedProposalRow(row: SupabaseWorkspaceRow): ProposalRecord | null {
+  if (!isWorkspaceSyncedRow(row)) {
+    return null
+  }
+
+  const metadata =
+    row.metadata && typeof row.metadata === 'object'
+      ? (row.metadata as Record<string, unknown>)
+      : Object.create(null)
+  const accountId = typeof row.account_id === 'string' ? row.account_id : ''
+
+  if (!accountId) {
+    return null
+  }
+
+  return normalizeProposal(
+    {
+      canceledAt: metadata.canceled_at,
+      clientName: metadata.client_name || row.title,
+      company: metadata.company,
+      createdAt: row.created_at,
+      email: metadata.email,
+      finishedAt: metadata.finished_at,
+      followUpScheduleTimes: metadata.follow_up_schedule_times,
+      history: metadata.history,
+      id: row.id,
+      lastError: metadata.last_error,
+      lastFollowUpAt: metadata.last_follow_up_at,
+      nextFollowUpAt: row.next_follow_up_at || metadata.next_follow_up_at,
+      notes: metadata.notes,
+      sentFollowUps: metadata.sent_follow_ups,
+      status: row.status,
+      targetFollowUps: metadata.target_follow_ups,
+      updatedAt: row.updated_at,
+    },
+    accountId,
+  )
+}
+
+function mergeRecordsByUpdatedAt<TRecord extends { id: string; updatedAt: string }>(
+  localRows: TRecord[],
+  remoteRows: TRecord[],
+): TRecord[] {
+  const rowsById = new Map(localRows.map((row) => [row.id, row]))
+
+  for (const remoteRow of remoteRows) {
+    const localRow = rowsById.get(remoteRow.id)
+
+    if (!localRow || new Date(remoteRow.updatedAt).getTime() >= new Date(localRow.updatedAt).getTime()) {
+      rowsById.set(remoteRow.id, remoteRow)
+    }
+  }
+
+  return Array.from(rowsById.values())
+}
+
+function isPresent<TValue>(value: TValue | null | undefined): value is TValue {
+  return value !== null && value !== undefined
+}
+
+async function selectWorkspaceRows(tableName: 'clients' | 'proposals', accountId: string) {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase
+    .from(tableName)
+    .select('*')
+    .eq('account_id', accountId)
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return []
+    }
+
+    throw new Error(error.message)
+  }
+
+  return (data ?? []) as SupabaseWorkspaceRow[]
+}
+
+async function selectEmailTemplateRows(accountId: string) {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase
+    .from('email_templates')
+    .select('account_id,template_type,step_number,title,subject,body,is_active,updated_at')
+    .eq('account_id', accountId)
+    .eq('is_active', true)
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return []
+    }
+
+    throw new Error(error.message)
+  }
+
+  return (data ?? []) as Array<SupabaseEmailTemplateRow & { updated_at?: string }>
+}
+
+function mergeRemoteTemplates(database: Database, remoteTemplates: SupabaseEmailTemplateRow[]) {
+  const appointmentTemplates = remoteTemplates
+    .filter((template) => template.template_type === 'appointment')
+    .sort((left, right) => left.step_number - right.step_number)
+    .map((template) => ({
+      accountId: database.accountId,
+      body: template.body,
+      id: `contact-${template.step_number}`,
+      subject: template.subject,
+      title: template.title,
+    }))
+  const proposalTemplates = remoteTemplates
+    .filter((template) => template.template_type === 'proposal')
+    .sort((left, right) => left.step_number - right.step_number)
+    .map((template) => ({
+      accountId: database.accountId,
+      body: template.body,
+      id: `proposal-contact-${template.step_number}`,
+      subject: template.subject,
+      title: template.title,
+    }))
+
+  if (appointmentTemplates.length > 0) {
+    database.settings.templates = normalizeTemplates(
+      appointmentTemplates,
+      createDefaultTemplates(DEFAULT_TRY_COUNT, database.accountId),
+      createLegacyDefaultTemplates(),
+      createDefaultTemplate,
+      createLegacyDefaultTemplate,
+      database.accountId,
+    )
+  }
+
+  if (proposalTemplates.length > 0) {
+    database.settings.proposalTemplates = normalizeTemplates(
+      proposalTemplates,
+      createDefaultProposalTemplates(DEFAULT_TRY_COUNT, database.accountId),
+      createLegacyDefaultProposalTemplates(),
+      createDefaultProposalTemplate,
+      createLegacyDefaultProposalTemplate,
+      database.accountId,
+    )
+  }
+}
+
+async function mergeSupabaseWorkspaceIntoDatabase(accountId: string, database: Database) {
+  const [clientRows, proposalRows, templateRows] = await Promise.all([
+    selectWorkspaceRows('clients', accountId),
+    selectWorkspaceRows('proposals', accountId),
+    selectEmailTemplateRows(accountId),
+  ])
+  const remoteClients = clientRows.map(mapSyncedClientRow).filter(isPresent)
+  const remoteProposals = proposalRows.map(mapSyncedProposalRow).filter(isPresent)
+
+  database.clients = mergeRecordsByUpdatedAt(database.clients, remoteClients)
+  database.proposals = mergeRecordsByUpdatedAt(database.proposals, remoteProposals)
+  mergeRemoteTemplates(database, templateRows)
+
+  return persistDatabase(accountId, database)
+}
+
 async function syncWorkspaceDatabaseToSupabase(
   account: AccountRecord,
   createdByUserId: string,
@@ -1881,16 +2166,17 @@ async function syncWorkspaceDatabaseToSupabase(
 
     const clientRows = database.clients
       .filter((client) => isUuid(client.id))
-      .map((client) => buildClientSyncRow(client, createdByUserId))
+      .map((client) => buildClientSyncRow(client, createdByUserId, database.settings))
     const proposalRows = database.proposals
       .filter((proposal) => isUuid(proposal.id))
-      .map((proposal) => buildProposalSyncRow(proposal, createdByUserId))
-    const [clientsSynced, proposalsSynced] = await Promise.all([
+      .map((proposal) => buildProposalSyncRow(proposal, createdByUserId, database.settings))
+    const [clientsSynced, proposalsSynced, templatesSynced] = await Promise.all([
       syncWorkspaceTableRows('clients', account.id, clientRows),
       syncWorkspaceTableRows('proposals', account.id, proposalRows),
+      syncEmailTemplatesToSupabase(account.id, createdByUserId, database.settings),
     ])
 
-    return clientsSynced && proposalsSynced
+    return clientsSynced && proposalsSynced && templatesSynced
   } catch {
     return false
   }
@@ -2902,9 +3188,15 @@ export const webApp = {
   async getAppState() {
     const { account, session } = await requireWorkspaceContext()
     const hasStoredDatabase = hasStoredDatabaseForAccount(account.id)
-    const database = loadDatabaseForAccount(account.id)
+    let database = loadDatabaseForAccount(account.id)
 
-    if (hasStoredDatabase) {
+    try {
+      database = await mergeSupabaseWorkspaceIntoDatabase(account.id, database)
+    } catch {
+      // Keep the local workspace available if the remote sync cannot be reached.
+    }
+
+    if (hasStoredDatabase || database.clients.length > 0 || database.proposals.length > 0) {
       await syncWorkspaceDatabaseToSupabase(account, session.user.id, database)
     }
 

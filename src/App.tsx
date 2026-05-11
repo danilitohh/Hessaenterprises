@@ -3700,7 +3700,7 @@ function App() {
                 <h3>{gmailConnection?.connected ? 'Gmail is connected' : 'Connect Gmail'}</h3>
                 <p>
                   {gmailConnection?.connected
-                    ? `Emails will be sent from ${gmailConnection.email}. Due appointment and proposal follow-ups send automatically while this dashboard is open.`
+                    ? `Emails will be sent from ${gmailConnection.email}. Due appointment and proposal follow-ups can keep sending from the scheduled backend job after this dashboard is closed.`
                     : 'Let users authorize Gmail once so appointment and proposal follow-up emails can send automatically from their own account.'}
                 </p>
               </div>
