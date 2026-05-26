@@ -1,7 +1,7 @@
 export type RuntimeInfo = {
   browser: string
   platform: 'web'
-  storage: 'localStorage'
+  storage: 'localStorage' | 'supabase'
 }
 
 export type UserRole = 'admin' | 'owner' | 'staff' | 'super_admin' | 'viewer'

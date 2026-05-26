@@ -50,6 +50,8 @@ const statusPriority = {
 
 type Database = {
   accountId: string
+  lastSyncedAt: string | null
+  settingsUpdatedAt: string | null
   version: number
   settings: SettingsState
   clients: ClientRecord[]
@@ -72,6 +74,10 @@ type EmailDeliveryResult = {
   method: 'draft' | 'gmail'
 }
 
+type WorkspaceSyncOptions = {
+  pruneRemoteRows?: boolean
+}
+
 type GmailSendFunctionResponse = {
   error?: string
   fromEmail?: string
@@ -80,6 +86,8 @@ type GmailSendFunctionResponse = {
   reason?: string
   sent: boolean
 }
+
+const remoteHydratedDatabases = new WeakSet<Database>()
 
 function createDefaultTemplate(contactNumber: number, accountId = ''): EmailTemplate {
   return {
@@ -172,6 +180,8 @@ function createLegacyDefaultProposalTemplates(count = DEFAULT_TRY_COUNT) {
 
 const defaultDatabase: Database = Object.freeze({
   accountId: '',
+  lastSyncedAt: null,
+  settingsUpdatedAt: null,
   version: 1,
   settings: {
     accountId: '',
@@ -195,7 +205,27 @@ function createId() {
     return crypto.randomUUID()
   }
 
-  return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const bytes = new Uint8Array(16)
+
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join('-')
 }
 
 function isUuid(value: string) {
@@ -576,6 +606,14 @@ function normalizeDatabase(rawData: unknown, accountId = ''): Database {
     'version' in normalized && Number.isInteger(normalized.version) && normalized.version > 0
       ? normalized.version
       : 1
+  database.lastSyncedAt =
+    ('lastSyncedAt' in normalized && typeof normalized.lastSyncedAt === 'string'
+      ? normalized.lastSyncedAt
+      : null) || null
+  database.settingsUpdatedAt =
+    ('settingsUpdatedAt' in normalized && typeof normalized.settingsUpdatedAt === 'string'
+      ? normalized.settingsUpdatedAt
+      : null) || null
 
   database.settings = {
     accountId,
@@ -1375,6 +1413,25 @@ function compareIsoDates(firstDate: string | null, secondDate: string | null) {
   return first - second
 }
 
+function getIsoTimestamp(isoDate: string | null | undefined) {
+  if (!isoDate) {
+    return 0
+  }
+
+  const timestamp = new Date(isoDate).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function getLatestIsoDate(isoDates: Array<string | null | undefined>) {
+  return isoDates.reduce<string | null>((latestDate, isoDate) => {
+    if (!isoDate) {
+      return latestDate
+    }
+
+    return getIsoTimestamp(isoDate) > getIsoTimestamp(latestDate) ? isoDate : latestDate
+  }, null)
+}
+
 function summarizeClients(clients: ClientRecord[]) {
   const now = Date.now()
 
@@ -1702,7 +1759,7 @@ function getRuntimeInfo(): RuntimeInfo {
   return {
     browser,
     platform: 'web',
-    storage: 'localStorage',
+    storage: 'supabase',
   }
 }
 
@@ -1731,6 +1788,15 @@ type SupabaseWorkspaceRow = Record<string, unknown> & {
 type SupabaseStoredWorkspaceRow = {
   id?: unknown
   metadata?: unknown
+}
+
+type SupabaseAccountSettingsRow = {
+  account_id: string
+  auto_open_draft_on_create: boolean
+  interval_days: number
+  sender_from_email: string | null
+  sender_from_name: string | null
+  updated_at: string
 }
 
 type SupabaseEmailTemplateRow = {
@@ -1849,6 +1915,7 @@ async function syncWorkspaceTableRows(
   tableName: 'clients' | 'proposals',
   accountId: string,
   rows: SupabaseWorkspaceRow[],
+  pruneRemoteRows: boolean,
 ) {
   const supabase = getSupabaseClient()
 
@@ -1864,6 +1931,10 @@ async function syncWorkspaceTableRows(
 
       return false
     }
+  }
+
+  if (!pruneRemoteRows) {
+    return true
   }
 
   const { data: storedRows, error: storedRowsError } = await supabase
@@ -1896,6 +1967,37 @@ async function syncWorkspaceTableRows(
 
   if (deleteError) {
     if (isSupabaseSchemaUnavailable(deleteError)) {
+      return false
+    }
+
+    return false
+  }
+
+  return true
+}
+
+async function syncAccountSettingsToSupabase(
+  accountId: string,
+  settings: SettingsState,
+  settingsUpdatedAt: string | null,
+) {
+  const supabase = getSupabaseClient()
+  const { error } = await supabase.from('account_settings').upsert(
+    {
+      account_id: accountId,
+      auto_open_draft_on_create: settings.automation.autoOpenDraftOnCreate,
+      interval_days: settings.automation.intervalDays,
+      sender_from_email: settings.sender.fromEmail,
+      sender_from_name: settings.sender.fromName || 'Hessa Enterprises',
+      updated_at: settingsUpdatedAt ?? new Date().toISOString(),
+    },
+    {
+      onConflict: 'account_id',
+    },
+  )
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
       return false
     }
 
@@ -2052,6 +2154,60 @@ function mergeRecordsByUpdatedAt<TRecord extends { id: string; updatedAt: string
   return Array.from(rowsById.values())
 }
 
+function mergeWorkspaceRecords<TRecord extends { id: string; updatedAt: string }>(
+  localRows: TRecord[],
+  remoteRows: TRecord[],
+  lastSyncedAt: string | null,
+): TRecord[] {
+  if (!lastSyncedAt) {
+    return mergeRecordsByUpdatedAt(localRows, remoteRows)
+  }
+
+  const lastSyncedTime = getIsoTimestamp(lastSyncedAt)
+  const rowsById = new Map(remoteRows.map((row) => [row.id, row]))
+
+  for (const localRow of localRows) {
+    const remoteRow = rowsById.get(localRow.id)
+
+    if (!remoteRow) {
+      if (getIsoTimestamp(localRow.updatedAt) > lastSyncedTime) {
+        rowsById.set(localRow.id, localRow)
+      }
+
+      continue
+    }
+
+    if (getIsoTimestamp(localRow.updatedAt) > getIsoTimestamp(remoteRow.updatedAt)) {
+      rowsById.set(localRow.id, localRow)
+    }
+  }
+
+  return Array.from(rowsById.values())
+}
+
+function ensureSyncableWorkspaceIds(database: Database) {
+  let didChange = false
+  const now = new Date().toISOString()
+
+  for (const client of database.clients) {
+    if (!isUuid(client.id)) {
+      client.id = createId()
+      client.updatedAt = now
+      didChange = true
+    }
+  }
+
+  for (const proposal of database.proposals) {
+    if (!isUuid(proposal.id)) {
+      proposal.id = createId()
+      proposal.updatedAt = now
+      didChange = true
+    }
+  }
+
+  return didChange
+}
+
 function isPresent<TValue>(value: TValue | null | undefined): value is TValue {
   return value !== null && value !== undefined
 }
@@ -2091,6 +2247,50 @@ async function selectEmailTemplateRows(accountId: string) {
   }
 
   return (data ?? []) as Array<SupabaseEmailTemplateRow & { updated_at?: string }>
+}
+
+async function selectAccountSettingsRow(accountId: string) {
+  const supabase = getSupabaseClient()
+  const { data, error } = await supabase
+    .from('account_settings')
+    .select(
+      'account_id,sender_from_email,sender_from_name,interval_days,auto_open_draft_on_create,updated_at',
+    )
+    .eq('account_id', accountId)
+    .maybeSingle()
+
+  if (error) {
+    if (isSupabaseSchemaUnavailable(error)) {
+      return null
+    }
+
+    throw new Error(error.message)
+  }
+
+  return data as SupabaseAccountSettingsRow | null
+}
+
+function mergeRemoteAccountSettings(
+  database: Database,
+  remoteSettings: SupabaseAccountSettingsRow | null,
+) {
+  if (!remoteSettings) {
+    return
+  }
+
+  const intervalDays = Number(remoteSettings.interval_days)
+
+  database.settings = {
+    ...database.settings,
+    sender: {
+      fromEmail: remoteSettings.sender_from_email ?? '',
+      fromName: remoteSettings.sender_from_name || 'Hessa Enterprises',
+    },
+    automation: {
+      intervalDays: Number.isFinite(intervalDays) && intervalDays > 0 ? Math.trunc(intervalDays) : 2,
+      autoOpenDraftOnCreate: remoteSettings.auto_open_draft_on_create !== false,
+    },
+  }
 }
 
 function mergeRemoteTemplates(database: Database, remoteTemplates: SupabaseEmailTemplateRow[]) {
@@ -2139,17 +2339,34 @@ function mergeRemoteTemplates(database: Database, remoteTemplates: SupabaseEmail
 }
 
 async function mergeSupabaseWorkspaceIntoDatabase(accountId: string, database: Database) {
-  const [clientRows, proposalRows, templateRows] = await Promise.all([
+  const [clientRows, proposalRows, templateRows, accountSettingsRow] = await Promise.all([
     selectWorkspaceRows('clients', accountId),
     selectWorkspaceRows('proposals', accountId),
     selectEmailTemplateRows(accountId),
+    selectAccountSettingsRow(accountId),
   ])
   const remoteClients = clientRows.map(mapSyncedClientRow).filter(isPresent)
   const remoteProposals = proposalRows.map(mapSyncedProposalRow).filter(isPresent)
+  const remoteSettingsUpdatedAt = getLatestIsoDate([
+    accountSettingsRow?.updated_at,
+    ...templateRows.map((template) => template.updated_at),
+  ])
+  const shouldUseRemoteSettings =
+    remoteSettingsUpdatedAt !== null &&
+    getIsoTimestamp(remoteSettingsUpdatedAt) >= getIsoTimestamp(database.settingsUpdatedAt)
 
-  database.clients = mergeRecordsByUpdatedAt(database.clients, remoteClients)
-  database.proposals = mergeRecordsByUpdatedAt(database.proposals, remoteProposals)
-  mergeRemoteTemplates(database, templateRows)
+  database.clients = mergeWorkspaceRecords(database.clients, remoteClients, database.lastSyncedAt)
+  database.proposals = mergeWorkspaceRecords(
+    database.proposals,
+    remoteProposals,
+    database.lastSyncedAt,
+  )
+
+  if (shouldUseRemoteSettings) {
+    mergeRemoteAccountSettings(database, accountSettingsRow)
+    mergeRemoteTemplates(database, templateRows)
+    database.settingsUpdatedAt = remoteSettingsUpdatedAt
+  }
 
   return persistDatabase(accountId, database)
 }
@@ -2158,25 +2375,33 @@ async function syncWorkspaceDatabaseToSupabase(
   account: AccountRecord,
   createdByUserId: string,
   database: Database,
+  options: WorkspaceSyncOptions = {},
 ) {
   try {
     if (!isUuid(account.id)) {
       return false
     }
 
+    ensureSyncableWorkspaceIds(database)
     const clientRows = database.clients
       .filter((client) => isUuid(client.id))
       .map((client) => buildClientSyncRow(client, createdByUserId, database.settings))
     const proposalRows = database.proposals
       .filter((proposal) => isUuid(proposal.id))
       .map((proposal) => buildProposalSyncRow(proposal, createdByUserId, database.settings))
-    const [clientsSynced, proposalsSynced, templatesSynced] = await Promise.all([
-      syncWorkspaceTableRows('clients', account.id, clientRows),
-      syncWorkspaceTableRows('proposals', account.id, proposalRows),
+    const [clientsSynced, proposalsSynced, settingsSynced, templatesSynced] = await Promise.all([
+      syncWorkspaceTableRows('clients', account.id, clientRows, options.pruneRemoteRows === true),
+      syncWorkspaceTableRows(
+        'proposals',
+        account.id,
+        proposalRows,
+        options.pruneRemoteRows === true,
+      ),
+      syncAccountSettingsToSupabase(account.id, database.settings, database.settingsUpdatedAt),
       syncEmailTemplatesToSupabase(account.id, createdByUserId, database.settings),
     ])
 
-    return clientsSynced && proposalsSynced && templatesSynced
+    return clientsSynced && proposalsSynced && settingsSynced && templatesSynced
   } catch {
     return false
   }
@@ -2188,14 +2413,42 @@ function persistDatabase(accountId: string, database: Database) {
   return saveDatabaseForAccount(accountId, database)
 }
 
+async function loadWorkspaceDatabase(accountId: string) {
+  let database = loadDatabaseForAccount(accountId)
+
+  try {
+    database = await mergeSupabaseWorkspaceIntoDatabase(accountId, database)
+    remoteHydratedDatabases.add(database)
+  } catch {
+    // Keep the local workspace available if the remote sync cannot be reached.
+  }
+
+  return database
+}
+
 async function persistWorkspaceDatabase(
   account: AccountRecord,
   currentUser: AuthUser,
   database: Database,
 ) {
+  const canSyncRemote = remoteHydratedDatabases.has(database)
   const persisted = persistDatabase(account.id, database)
-  await syncWorkspaceDatabaseToSupabase(account, currentUser.id, persisted)
-  return persisted
+  persisted.settingsUpdatedAt = persisted.settingsUpdatedAt ?? new Date().toISOString()
+
+  if (!canSyncRemote) {
+    return persisted
+  }
+
+  const didSync = await syncWorkspaceDatabaseToSupabase(account, currentUser.id, persisted, {
+    pruneRemoteRows: true,
+  })
+
+  if (!didSync) {
+    return persisted
+  }
+
+  persisted.lastSyncedAt = new Date().toISOString()
+  return persistDatabase(account.id, persisted)
 }
 
 async function syncLocalPlatformDatabasesToSupabase(createdByUserId: string) {
@@ -2211,7 +2464,9 @@ async function syncLocalPlatformDatabasesToSupabase(createdByUserId: string) {
 
       try {
         const database = normalizeDatabase(JSON.parse(stored), account.id)
-        return syncWorkspaceDatabaseToSupabase(account, createdByUserId, database)
+        return syncWorkspaceDatabaseToSupabase(account, createdByUserId, database, {
+          pruneRemoteRows: false,
+        })
       } catch {
         return false
       }
@@ -3187,17 +3442,18 @@ export const webApp = {
 
   async getAppState() {
     const { account, session } = await requireWorkspaceContext()
-    const hasStoredDatabase = hasStoredDatabaseForAccount(account.id)
-    let database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
 
-    try {
-      database = await mergeSupabaseWorkspaceIntoDatabase(account.id, database)
-    } catch {
-      // Keep the local workspace available if the remote sync cannot be reached.
-    }
-
-    if (hasStoredDatabase || database.clients.length > 0 || database.proposals.length > 0) {
-      await syncWorkspaceDatabaseToSupabase(account, session.user.id, database)
+    if (
+      hasStoredDatabaseForAccount(account.id) ||
+      database.clients.length > 0 ||
+      database.proposals.length > 0
+    ) {
+      return getAppStateFromDatabase(
+        await persistWorkspaceDatabase(account, session.user, database),
+        session.user,
+        account,
+      )
     }
 
     return getAppStateFromDatabase(database, session.user, account)
@@ -3295,8 +3551,9 @@ export const webApp = {
 
   async saveSettings(incomingSettings: SettingsInput) {
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     database.settings = mergeSettings(database.settings, incomingSettings, account.id)
+    database.settingsUpdatedAt = new Date().toISOString()
     const persisted = await persistWorkspaceDatabase(account, session.user, database)
 
     return {
@@ -3330,7 +3587,7 @@ export const webApp = {
       normalizeScheduleTime(clientInput.contactScheduleTimes[index], getDefaultScheduleTime(index)),
     )
 
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     database.settings.templates = ensureTemplateCount(
       database.settings.templates,
       targetContacts,
@@ -3413,7 +3670,7 @@ export const webApp = {
       ),
     )
 
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     database.settings.proposalTemplates = ensureTemplateCount(
       database.settings.proposalTemplates,
       targetFollowUps,
@@ -3476,7 +3733,7 @@ export const webApp = {
 
   async processDueFollowUps(options: EmailDeliveryOptions = {}) {
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const candidates = selectClientsForProcessing(database.clients)
 
     if (candidates.length === 0) {
@@ -3515,7 +3772,7 @@ export const webApp = {
 
   async processDueProposalFollowUps(options: EmailDeliveryOptions = {}) {
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const candidates = selectProposalsForProcessing(database.proposals)
 
     if (candidates.length === 0) {
@@ -3556,7 +3813,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -3588,7 +3845,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const proposal = database.proposals.find((item) => item.id === proposalId)
 
     if (!proposal) {
@@ -3616,7 +3873,7 @@ export const webApp = {
 
   async updateClientStatus(clientId: string, nextStatus: ClientRecord['status']) {
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -3666,7 +3923,7 @@ export const webApp = {
 
   async updateProposalStatus(proposalId: string, nextStatus: ProposalRecord['status']) {
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const proposal = database.proposals.find((item) => item.id === proposalId)
 
     if (!proposal) {
@@ -3721,7 +3978,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const clientIndex = database.clients.findIndex((item) => item.id === clientId)
 
     if (clientIndex === -1) {
@@ -3748,7 +4005,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = loadDatabaseForAccount(account.id)
+    const database = await loadWorkspaceDatabase(account.id)
     const proposalIndex = database.proposals.findIndex((item) => item.id === proposalId)
 
     if (proposalIndex === -1) {

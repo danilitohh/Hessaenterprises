@@ -6,7 +6,7 @@ Aplicacion web en `React + TypeScript` para gestionar clientes y llevar seguimie
 
 - Registra clientes con nombre, correo, empresa y notas.
 - Define la cantidad de intentos que cada usuario quiera usar por seguimiento.
-- Guarda clientes, reglas y plantillas en `localStorage` del navegador.
+- Guarda clientes, seguimientos, estados de envio y plantillas por cuenta en Supabase, con cache local solo como respaldo.
 - Abre cada correo como borrador en el cliente de correo predeterminado del usuario.
 - Reprograma automaticamente el siguiente contacto segun el intervalo configurado.
 - Finaliza el flujo cuando el cliente completa todos sus intentos.
@@ -78,7 +78,7 @@ Para seguridad multi-tenant real en Supabase, aplica la migracion:
 supabase db push
 ```
 
-La migracion `supabase/migrations/202605050001_saas_multi_tenant.sql` crea `accounts`, `account_users`, campos de monetizacion futura, tablas base para appointments/proposals/follow-ups/templates, `account_id` en registros de Gmail y politicas RLS.
+La migracion `supabase/migrations/202605050001_saas_multi_tenant.sql` crea `accounts`, `account_users`, campos de monetizacion futura, tablas base para appointments/proposals/follow-ups/templates, `account_id` en registros de Gmail y politicas RLS. La migracion `supabase/migrations/202605260001_account_settings.sql` agrega la configuracion persistente por cuenta para que clientes, seguimientos, enviados y ajustes se hidraten al iniciar sesion desde otro computador.
 
 Para que el super admin vea absolutamente todos los usuarios registrados en Supabase Auth, despliega tambien:
 
