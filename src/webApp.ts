@@ -34,6 +34,7 @@ const LEGACY_STORAGE_KEY = 'hessa-followup-web'
 const PLATFORM_STORAGE_KEY = 'hessa-followup-web:platform'
 const ACCOUNT_STORAGE_PREFIX = 'hessa-followup-web:account:'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
+const LOCAL_MIGRATION_PREFIX = 'hessa-followup-web:migrated:'
 const WORKSPACE_SYNC_SOURCE = 'workspace-local'
 const DEFAULT_SUPER_ADMIN_EMAILS = ['kevin.hessam@gmail.com', 'danilitohhh@gmail.com']
 const DEFAULT_TRY_COUNT = 4
@@ -995,6 +996,10 @@ function getAccountStorageKey(accountId: string) {
   return `${ACCOUNT_STORAGE_PREFIX}${accountId}`
 }
 
+function getLocalMigrationKey(targetAccountId: string, sourceStorageKey: string) {
+  return `${LOCAL_MIGRATION_PREFIX}${targetAccountId}:${sourceStorageKey}`
+}
+
 function loadDatabaseByKey(storageKey: string, accountId: string) {
   try {
     const stored = window.localStorage.getItem(storageKey)
@@ -1025,6 +1030,185 @@ function hasStoredDatabaseForAccount(accountId: string) {
 
 function saveDatabaseForAccount(accountId: string, database: Database) {
   return saveDatabaseByKey(getAccountStorageKey(accountId), database, accountId)
+}
+
+function getSettingsSnapshot(settings: SettingsState) {
+  return {
+    automation: settings.automation,
+    proposalTemplates: settings.proposalTemplates.map((template) => ({
+      body: template.body,
+      subject: template.subject,
+      title: template.title,
+    })),
+    sender: settings.sender,
+    templates: settings.templates.map((template) => ({
+      body: template.body,
+      subject: template.subject,
+      title: template.title,
+    })),
+  }
+}
+
+function hasCustomizedSettings(database: Database) {
+  const defaults = cloneDefaultDatabase(database.accountId)
+  defaults.settings.templates = ensureTemplateCount(
+    defaults.settings.templates,
+    database.settings.templates.length,
+    createDefaultTemplate,
+    database.accountId,
+  )
+  defaults.settings.proposalTemplates = ensureTemplateCount(
+    defaults.settings.proposalTemplates,
+    database.settings.proposalTemplates.length,
+    createDefaultProposalTemplate,
+    database.accountId,
+  )
+
+  return (
+    JSON.stringify(getSettingsSnapshot(database.settings)) !==
+    JSON.stringify(getSettingsSnapshot(defaults.settings))
+  )
+}
+
+function getDatabaseContentScore(database: Database) {
+  const sentContacts = database.clients.reduce((total, client) => total + client.sentContacts, 0)
+  const sentFollowUps = database.proposals.reduce(
+    (total, proposal) => total + proposal.sentFollowUps,
+    0,
+  )
+  const historyItems =
+    database.clients.reduce((total, client) => total + client.history.length, 0) +
+    database.proposals.reduce((total, proposal) => total + proposal.history.length, 0)
+
+  return (
+    database.clients.length * 1_000 +
+    database.proposals.length * 1_000 +
+    sentContacts * 100 +
+    sentFollowUps * 100 +
+    historyItems * 10 +
+    (database.settingsUpdatedAt || hasCustomizedSettings(database) ? 1 : 0)
+  )
+}
+
+function readLocalDatabaseSource(storageKey: string, accountId: string) {
+  const stored = window.localStorage.getItem(storageKey)
+
+  if (!stored) {
+    return null
+  }
+
+  try {
+    return normalizeDatabase(JSON.parse(stored), accountId)
+  } catch {
+    return null
+  }
+}
+
+function getUserLocalDatabaseSources(accountId: string, userId: string) {
+  const storageKeys = new Set<string>([
+    LEGACY_STORAGE_KEY,
+    getWorkspaceStorageKey(userId),
+    getAccountStorageKey(createAccountId(userId)),
+  ])
+  const platform = loadPlatformRegistry()
+
+  for (const user of platform.users) {
+    if (user.userId === userId && user.accountId !== accountId) {
+      storageKeys.add(getAccountStorageKey(user.accountId))
+    }
+  }
+
+  storageKeys.delete(getAccountStorageKey(accountId))
+
+  return Array.from(storageKeys)
+    .map((storageKey) => ({
+      database: readLocalDatabaseSource(storageKey, accountId),
+      storageKey,
+    }))
+    .filter(
+      (source): source is { database: Database; storageKey: string } =>
+        source.database !== null && getDatabaseContentScore(source.database) > 0,
+    )
+    .sort(
+      (left, right) =>
+        getDatabaseContentScore(right.database) - getDatabaseContentScore(left.database),
+    )
+}
+
+function shouldImportLocalDatabaseSource(database: Database, sourceDatabase: Database) {
+  const currentClientIds = new Set(database.clients.map((client) => client.id))
+  const currentProposalIds = new Set(database.proposals.map((proposal) => proposal.id))
+  const hasMissingClients = sourceDatabase.clients.some((client) => !currentClientIds.has(client.id))
+  const hasMissingProposals = sourceDatabase.proposals.some(
+    (proposal) => !currentProposalIds.has(proposal.id),
+  )
+  const sourceHasCustomSettings = hasCustomizedSettings(sourceDatabase)
+  const currentHasCustomSettings = hasCustomizedSettings(database)
+
+  return (
+    hasMissingClients ||
+    hasMissingProposals ||
+    (sourceHasCustomSettings && !currentHasCustomSettings)
+  )
+}
+
+function mergeLocalDatabaseSource(database: Database, sourceDatabase: Database) {
+  const before = JSON.stringify({
+    clients: database.clients,
+    proposals: database.proposals,
+    settings: getSettingsSnapshot(database.settings),
+    settingsUpdatedAt: database.settingsUpdatedAt,
+  })
+
+  database.clients = mergeRecordsByUpdatedAt(database.clients, sourceDatabase.clients)
+  database.proposals = mergeRecordsByUpdatedAt(database.proposals, sourceDatabase.proposals)
+
+  const sourceHasCustomSettings = hasCustomizedSettings(sourceDatabase)
+  const currentHasCustomSettings = hasCustomizedSettings(database)
+  const sourceSettingsTime = getIsoTimestamp(sourceDatabase.settingsUpdatedAt)
+  const currentSettingsTime = getIsoTimestamp(database.settingsUpdatedAt)
+
+  if (
+    sourceHasCustomSettings &&
+    (!currentHasCustomSettings || sourceSettingsTime >= currentSettingsTime)
+  ) {
+    database.settings = sourceDatabase.settings
+    database.settingsUpdatedAt = sourceDatabase.settingsUpdatedAt ?? new Date().toISOString()
+  }
+
+  const after = JSON.stringify({
+    clients: database.clients,
+    proposals: database.proposals,
+    settings: getSettingsSnapshot(database.settings),
+    settingsUpdatedAt: database.settingsUpdatedAt,
+  })
+
+  return before !== after
+}
+
+function rescueUserLocalDatabaseIntoAccount(accountId: string, userId: string, database: Database) {
+  const sources = getUserLocalDatabaseSources(accountId, userId)
+  let didImport = false
+
+  for (const source of sources) {
+    const migrationKey = getLocalMigrationKey(accountId, source.storageKey)
+
+    if (window.localStorage.getItem(migrationKey)) {
+      continue
+    }
+
+    if (!shouldImportLocalDatabaseSource(database, source.database)) {
+      continue
+    }
+
+    if (mergeLocalDatabaseSource(database, source.database)) {
+      didImport = true
+    }
+
+    window.localStorage.setItem(migrationKey, new Date().toISOString())
+  }
+
+  return didImport
 }
 
 function migrateAccountDatabase(sourceAccountId: string, targetAccountId: string) {
@@ -2413,14 +2597,24 @@ function persistDatabase(accountId: string, database: Database) {
   return saveDatabaseForAccount(accountId, database)
 }
 
-async function loadWorkspaceDatabase(accountId: string) {
+async function loadWorkspaceDatabase(accountId: string, userId?: string) {
   let database = loadDatabaseForAccount(accountId)
+  let didHydrateRemote = false
 
   try {
     database = await mergeSupabaseWorkspaceIntoDatabase(accountId, database)
     remoteHydratedDatabases.add(database)
+    didHydrateRemote = true
   } catch {
     // Keep the local workspace available if the remote sync cannot be reached.
+  }
+
+  if (userId && rescueUserLocalDatabaseIntoAccount(accountId, userId, database)) {
+    database = persistDatabase(accountId, database)
+
+    if (didHydrateRemote) {
+      remoteHydratedDatabases.add(database)
+    }
   }
 
   return database
@@ -3442,7 +3636,7 @@ export const webApp = {
 
   async getAppState() {
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
 
     if (
       hasStoredDatabaseForAccount(account.id) ||
@@ -3551,7 +3745,7 @@ export const webApp = {
 
   async saveSettings(incomingSettings: SettingsInput) {
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     database.settings = mergeSettings(database.settings, incomingSettings, account.id)
     database.settingsUpdatedAt = new Date().toISOString()
     const persisted = await persistWorkspaceDatabase(account, session.user, database)
@@ -3587,7 +3781,7 @@ export const webApp = {
       normalizeScheduleTime(clientInput.contactScheduleTimes[index], getDefaultScheduleTime(index)),
     )
 
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     database.settings.templates = ensureTemplateCount(
       database.settings.templates,
       targetContacts,
@@ -3670,7 +3864,7 @@ export const webApp = {
       ),
     )
 
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     database.settings.proposalTemplates = ensureTemplateCount(
       database.settings.proposalTemplates,
       targetFollowUps,
@@ -3733,7 +3927,7 @@ export const webApp = {
 
   async processDueFollowUps(options: EmailDeliveryOptions = {}) {
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const candidates = selectClientsForProcessing(database.clients)
 
     if (candidates.length === 0) {
@@ -3772,7 +3966,7 @@ export const webApp = {
 
   async processDueProposalFollowUps(options: EmailDeliveryOptions = {}) {
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const candidates = selectProposalsForProcessing(database.proposals)
 
     if (candidates.length === 0) {
@@ -3813,7 +4007,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -3845,7 +4039,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const proposal = database.proposals.find((item) => item.id === proposalId)
 
     if (!proposal) {
@@ -3873,7 +4067,7 @@ export const webApp = {
 
   async updateClientStatus(clientId: string, nextStatus: ClientRecord['status']) {
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const client = database.clients.find((item) => item.id === clientId)
 
     if (!client) {
@@ -3923,7 +4117,7 @@ export const webApp = {
 
   async updateProposalStatus(proposalId: string, nextStatus: ProposalRecord['status']) {
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const proposal = database.proposals.find((item) => item.id === proposalId)
 
     if (!proposal) {
@@ -3978,7 +4172,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const clientIndex = database.clients.findIndex((item) => item.id === clientId)
 
     if (clientIndex === -1) {
@@ -4005,7 +4199,7 @@ export const webApp = {
     }
 
     const { account, session } = await requireWorkspaceContext()
-    const database = await loadWorkspaceDatabase(account.id)
+    const database = await loadWorkspaceDatabase(account.id, session.user.id)
     const proposalIndex = database.proposals.findIndex((item) => item.id === proposalId)
 
     if (proposalIndex === -1) {

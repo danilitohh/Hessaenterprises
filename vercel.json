@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/gmail-followups",
-      "schedule": "0 * * * *"
+      "schedule": "0 13 * * *"
     }
   ],
   "rewrites": [
