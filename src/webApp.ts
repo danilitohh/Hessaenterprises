@@ -35,6 +35,7 @@ const PLATFORM_STORAGE_KEY = 'hessa-followup-web:platform'
 const ACCOUNT_STORAGE_PREFIX = 'hessa-followup-web:account:'
 const WORKSPACE_STORAGE_PREFIX = 'hessa-followup-web:workspace:'
 const LOCAL_MIGRATION_PREFIX = 'hessa-followup-web:migrated:'
+const LOCAL_SETTINGS_MIGRATION_PREFIX = 'hessa-followup-web:migrated-settings:v2:'
 const WORKSPACE_SYNC_SOURCE = 'workspace-local'
 const DEFAULT_SUPER_ADMIN_EMAILS = ['kevin.hessam@gmail.com', 'danilitohhh@gmail.com']
 const DEFAULT_TRY_COUNT = 4
@@ -1000,6 +1001,10 @@ function getLocalMigrationKey(targetAccountId: string, sourceStorageKey: string)
   return `${LOCAL_MIGRATION_PREFIX}${targetAccountId}:${sourceStorageKey}`
 }
 
+function getLocalSettingsMigrationKey(targetAccountId: string, sourceStorageKey: string) {
+  return `${LOCAL_SETTINGS_MIGRATION_PREFIX}${targetAccountId}:${sourceStorageKey}`
+}
+
 function loadDatabaseByKey(storageKey: string, accountId: string) {
   try {
     const stored = window.localStorage.getItem(storageKey)
@@ -1135,24 +1140,30 @@ function getUserLocalDatabaseSources(accountId: string, userId: string) {
     )
 }
 
-function shouldImportLocalDatabaseSource(database: Database, sourceDatabase: Database) {
+function shouldImportLocalWorkspaceRecords(database: Database, sourceDatabase: Database) {
   const currentClientIds = new Set(database.clients.map((client) => client.id))
   const currentProposalIds = new Set(database.proposals.map((proposal) => proposal.id))
   const hasMissingClients = sourceDatabase.clients.some((client) => !currentClientIds.has(client.id))
   const hasMissingProposals = sourceDatabase.proposals.some(
     (proposal) => !currentProposalIds.has(proposal.id),
   )
-  const sourceHasCustomSettings = hasCustomizedSettings(sourceDatabase)
-  const currentHasCustomSettings = hasCustomizedSettings(database)
 
+  return hasMissingClients || hasMissingProposals
+}
+
+function shouldImportLocalWorkspaceSettings(database: Database, sourceDatabase: Database) {
   return (
-    hasMissingClients ||
-    hasMissingProposals ||
-    (sourceHasCustomSettings && !currentHasCustomSettings)
+    hasCustomizedSettings(sourceDatabase) &&
+    JSON.stringify(getSettingsSnapshot(sourceDatabase.settings)) !==
+      JSON.stringify(getSettingsSnapshot(database.settings))
   )
 }
 
-function mergeLocalDatabaseSource(database: Database, sourceDatabase: Database) {
+function mergeLocalDatabaseSource(
+  database: Database,
+  sourceDatabase: Database,
+  options: { importRecords: boolean; importSettings: boolean },
+) {
   const before = JSON.stringify({
     clients: database.clients,
     proposals: database.proposals,
@@ -1160,18 +1171,12 @@ function mergeLocalDatabaseSource(database: Database, sourceDatabase: Database) 
     settingsUpdatedAt: database.settingsUpdatedAt,
   })
 
-  database.clients = mergeRecordsByUpdatedAt(database.clients, sourceDatabase.clients)
-  database.proposals = mergeRecordsByUpdatedAt(database.proposals, sourceDatabase.proposals)
+  if (options.importRecords) {
+    database.clients = mergeRecordsByUpdatedAt(database.clients, sourceDatabase.clients)
+    database.proposals = mergeRecordsByUpdatedAt(database.proposals, sourceDatabase.proposals)
+  }
 
-  const sourceHasCustomSettings = hasCustomizedSettings(sourceDatabase)
-  const currentHasCustomSettings = hasCustomizedSettings(database)
-  const sourceSettingsTime = getIsoTimestamp(sourceDatabase.settingsUpdatedAt)
-  const currentSettingsTime = getIsoTimestamp(database.settingsUpdatedAt)
-
-  if (
-    sourceHasCustomSettings &&
-    (!currentHasCustomSettings || sourceSettingsTime >= currentSettingsTime)
-  ) {
+  if (options.importSettings && hasCustomizedSettings(sourceDatabase)) {
     database.settings = sourceDatabase.settings
     database.settingsUpdatedAt = sourceDatabase.settingsUpdatedAt ?? new Date().toISOString()
   }
@@ -1192,20 +1197,29 @@ function rescueUserLocalDatabaseIntoAccount(accountId: string, userId: string, d
 
   for (const source of sources) {
     const migrationKey = getLocalMigrationKey(accountId, source.storageKey)
+    const settingsMigrationKey = getLocalSettingsMigrationKey(accountId, source.storageKey)
+    const importRecords =
+      !window.localStorage.getItem(migrationKey) &&
+      shouldImportLocalWorkspaceRecords(database, source.database)
+    const importSettings =
+      !window.localStorage.getItem(settingsMigrationKey) &&
+      shouldImportLocalWorkspaceSettings(database, source.database)
 
-    if (window.localStorage.getItem(migrationKey)) {
+    if (!importRecords && !importSettings) {
       continue
     }
 
-    if (!shouldImportLocalDatabaseSource(database, source.database)) {
-      continue
-    }
-
-    if (mergeLocalDatabaseSource(database, source.database)) {
+    if (mergeLocalDatabaseSource(database, source.database, { importRecords, importSettings })) {
       didImport = true
     }
 
-    window.localStorage.setItem(migrationKey, new Date().toISOString())
+    if (importRecords) {
+      window.localStorage.setItem(migrationKey, new Date().toISOString())
+    }
+
+    if (importSettings) {
+      window.localStorage.setItem(settingsMigrationKey, new Date().toISOString())
+    }
   }
 
   return didImport
@@ -2535,9 +2549,20 @@ async function mergeSupabaseWorkspaceIntoDatabase(accountId: string, database: D
     accountSettingsRow?.updated_at,
     ...templateRows.map((template) => template.updated_at),
   ])
+  const remoteSettingsDatabase = cloneDefaultDatabase(accountId)
+
+  if (remoteSettingsUpdatedAt) {
+    mergeRemoteAccountSettings(remoteSettingsDatabase, accountSettingsRow)
+    mergeRemoteTemplates(remoteSettingsDatabase, templateRows)
+    remoteSettingsDatabase.settingsUpdatedAt = remoteSettingsUpdatedAt
+  }
+
+  const remoteHasCustomSettings = hasCustomizedSettings(remoteSettingsDatabase)
+  const localHasCustomSettings = hasCustomizedSettings(database)
   const shouldUseRemoteSettings =
     remoteSettingsUpdatedAt !== null &&
-    getIsoTimestamp(remoteSettingsUpdatedAt) >= getIsoTimestamp(database.settingsUpdatedAt)
+    getIsoTimestamp(remoteSettingsUpdatedAt) >= getIsoTimestamp(database.settingsUpdatedAt) &&
+    (remoteHasCustomSettings || !localHasCustomSettings)
 
   database.clients = mergeWorkspaceRecords(database.clients, remoteClients, database.lastSyncedAt)
   database.proposals = mergeWorkspaceRecords(
@@ -2547,9 +2572,8 @@ async function mergeSupabaseWorkspaceIntoDatabase(accountId: string, database: D
   )
 
   if (shouldUseRemoteSettings) {
-    mergeRemoteAccountSettings(database, accountSettingsRow)
-    mergeRemoteTemplates(database, templateRows)
-    database.settingsUpdatedAt = remoteSettingsUpdatedAt
+    database.settings = remoteSettingsDatabase.settings
+    database.settingsUpdatedAt = remoteSettingsDatabase.settingsUpdatedAt
   }
 
   return persistDatabase(accountId, database)
