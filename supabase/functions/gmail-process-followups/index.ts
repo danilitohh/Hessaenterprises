@@ -1,5 +1,10 @@
 import { decryptToken } from '../_shared/crypto.ts'
-import { createRawEmailMessage, refreshGoogleAccessToken, sendGmailMessage } from '../_shared/google.ts'
+import {
+  createRawEmailMessage,
+  isGoogleRefreshTokenInvalidError,
+  refreshGoogleAccessToken,
+  sendGmailMessage,
+} from '../_shared/google.ts'
 import { handleOptions, jsonResponse } from '../_shared/http.ts'
 import { createAdminClient } from '../_shared/supabase.ts'
 
@@ -9,6 +14,8 @@ const DEFAULT_TIME_ZONE = Deno.env.get('DEFAULT_TIME_ZONE')?.trim() || 'America/
 const FRESH_LOCK_MS = 15 * 60 * 1000
 const MAX_CANDIDATE_FETCH = 500
 const WORKSPACE_SYNC_SOURCE = 'workspace-local'
+const GMAIL_RECONNECT_MESSAGE =
+  'Gmail access expired or was revoked. Reconnect Gmail in Settings, then try sending again.'
 
 type SupabaseAdminClient = ReturnType<typeof createAdminClient>
 type FollowUpKind = 'appointment' | 'proposal'
@@ -783,6 +790,21 @@ async function sendCandidateEmail(
   return sendGmailMessage(token.access_token, raw)
 }
 
+async function markConnectionRevoked(supabase: SupabaseAdminClient, connectionId: string) {
+  const now = new Date().toISOString()
+  const { error } = await supabase
+    .from('gmail_connections')
+    .update({
+      revoked_at: now,
+      updated_at: now,
+    })
+    .eq('id', connectionId)
+
+  if (error) {
+    console.error('Unable to mark Gmail connection revoked', error.message)
+  }
+}
+
 async function processCandidate(
   supabase: SupabaseAdminClient,
   candidate: Candidate,
@@ -815,8 +837,19 @@ async function processCandidate(
     await insertAuditRows(supabase, candidate, connection, payload, 'sent', sentMessage.id, null)
     return 'sent' as const
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to send Gmail follow-up.'
+    const reconnectRequired = isGoogleRefreshTokenInvalidError(error)
+    const message = reconnectRequired
+      ? GMAIL_RECONNECT_MESSAGE
+      : error instanceof Error
+        ? error.message
+        : 'Unable to send Gmail follow-up.'
     const failedAt = new Date().toISOString()
+
+    if (reconnectRequired && connection) {
+      await markConnectionRevoked(supabase, connection.id)
+      connections.delete(candidate.userId)
+    }
+
     await markCandidateFailed(supabase, candidate, payload, failedAt, message)
     await insertAuditRows(supabase, candidate, connection, payload, 'failed', null, message)
     return 'failed' as const

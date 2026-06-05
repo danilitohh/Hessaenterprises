@@ -1,11 +1,19 @@
 import { decryptToken } from '../_shared/crypto.ts'
-import { createRawEmailMessage, refreshGoogleAccessToken, sendGmailMessage } from '../_shared/google.ts'
+import {
+  createRawEmailMessage,
+  isGoogleRefreshTokenInvalidError,
+  refreshGoogleAccessToken,
+  sendGmailMessage,
+} from '../_shared/google.ts'
 import { handleOptions, jsonResponse } from '../_shared/http.ts'
 import {
   createAdminClient,
   getAuthenticatedUser,
   getUserPrimaryAccountId,
 } from '../_shared/supabase.ts'
+
+const GMAIL_RECONNECT_MESSAGE =
+  'Gmail access expired or was revoked. Reconnect Gmail in Settings, then try sending again.'
 
 type SendRequest = {
   body?: string
@@ -36,6 +44,24 @@ function assertSendRequest(input: SendRequest) {
     scheduledFor: input.scheduledFor || null,
     subject: input.subject,
     to: input.to,
+  }
+}
+
+async function markConnectionRevoked(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+) {
+  const now = new Date().toISOString()
+  const { error } = await supabase
+    .from('gmail_connections')
+    .update({
+      revoked_at: now,
+      updated_at: now,
+    })
+    .eq('id', connectionId)
+
+  if (error) {
+    console.error('Unable to mark Gmail connection revoked', error.message)
   }
 }
 
@@ -111,12 +137,23 @@ Deno.serve(async (req) => {
       sent: true,
     })
   } catch (error) {
+    const reconnectRequired = isGoogleRefreshTokenInvalidError(error)
+    const message = reconnectRequired
+      ? GMAIL_RECONNECT_MESSAGE
+      : error instanceof Error
+        ? error.message
+        : 'Gmail send failed.'
+
+    if (supabase && connectionId && reconnectRequired) {
+      await markConnectionRevoked(supabase, connectionId)
+    }
+
     if (supabase && userId && payload) {
       await supabase.from('gmail_send_logs').insert({
         account_id: accountId,
         client_name: payload.clientName,
         contact_number: payload.contactNumber,
-        error: error instanceof Error ? error.message : 'Gmail send failed.',
+        error: message,
         gmail_connection_id: connectionId,
         recipient: payload.to,
         scheduled_for: payload.scheduledFor,
@@ -128,11 +165,12 @@ Deno.serve(async (req) => {
 
     return jsonResponse(
       {
-        error: error instanceof Error ? error.message : 'Unable to send Gmail follow-up.',
-        reason: 'gmail_send_failed',
+        error: message,
+        message,
+        reason: reconnectRequired ? 'gmail_reconnect_required' : 'gmail_send_failed',
         sent: false,
       },
-      { status: 500 },
+      { status: reconnectRequired ? 409 : 500 },
     )
   }
 })

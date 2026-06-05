@@ -5,6 +5,48 @@ const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 
+type GoogleErrorPayload = {
+  error?: unknown
+  error_description?: unknown
+}
+
+export class GoogleOAuthError extends Error {
+  code: string | null
+  status: number
+
+  constructor(message: string, options: { code?: string | null; status: number }) {
+    super(message)
+    this.name = 'GoogleOAuthError'
+    this.code = options.code ?? null
+    this.status = options.status
+  }
+}
+
+function getGoogleErrorCode(data: GoogleErrorPayload) {
+  return typeof data.error === 'string' ? data.error : null
+}
+
+function getGoogleErrorMessage(data: GoogleErrorPayload, fallback: string) {
+  return typeof data.error_description === 'string'
+    ? data.error_description
+    : getGoogleErrorCode(data) ?? fallback
+}
+
+export function isGoogleRefreshTokenInvalidError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  const message = error.message.toLowerCase()
+
+  return (
+    (error instanceof GoogleOAuthError && error.code === 'invalid_grant') ||
+    message.includes('expired or revoked') ||
+    message.includes('invalid_grant') ||
+    (message.includes('invalid') && message.includes('refresh token'))
+  )
+}
+
 export async function createGoogleAuthUrl(state: string, codeVerifier: string) {
   const codeChallenge = await createCodeChallenge(codeVerifier)
   const authUrl = new URL(GOOGLE_AUTH_URL)
@@ -51,7 +93,10 @@ export async function exchangeCodeForTokens(code: string, codeVerifier: string) 
   const data = await response.json()
 
   if (!response.ok) {
-    throw new Error(data.error_description ?? data.error ?? 'Google token exchange failed.')
+    throw new GoogleOAuthError(getGoogleErrorMessage(data, 'Google token exchange failed.'), {
+      code: getGoogleErrorCode(data),
+      status: response.status,
+    })
   }
 
   return data as {
@@ -80,7 +125,10 @@ export async function refreshGoogleAccessToken(refreshToken: string) {
   const data = await response.json()
 
   if (!response.ok) {
-    throw new Error(data.error_description ?? data.error ?? 'Unable to refresh Gmail access.')
+    throw new GoogleOAuthError(getGoogleErrorMessage(data, 'Unable to refresh Gmail access.'), {
+      code: getGoogleErrorCode(data),
+      status: response.status,
+    })
   }
 
   return data as {

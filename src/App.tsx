@@ -247,6 +247,16 @@ function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Something went wrong.'
 }
 
+function isGmailReconnectRequired(error: unknown) {
+  const message = toErrorMessage(error).toLowerCase()
+
+  return (
+    message.includes('gmail access expired') ||
+    message.includes('reconnect gmail') ||
+    message.includes('expired or revoked')
+  )
+}
+
 function toDiagnosticDetail(error: unknown) {
   if (error instanceof Error) {
     return error.stack || error.message
@@ -852,6 +862,24 @@ function App() {
     }
   }
 
+  function handleGmailOperationError(context: string, error: unknown) {
+    if (isGmailReconnectRequired(error)) {
+      setGmailConnection({
+        connected: false,
+        connectedAt: null,
+        email: null,
+        mode: 'draft',
+      })
+      void refreshGmailConnection(false)
+    }
+
+    setNotice({
+      tone: 'error',
+      message: toErrorMessage(error),
+    })
+    recordDiagnostic(context, error)
+  }
+
   function applyAdminState(nextAdminState: AdminPlatformState) {
     setAdminState(nextAdminState)
     setPlanPricingDrafts(createPlanPricingDrafts(nextAdminState.planPricing))
@@ -1066,11 +1094,7 @@ function App() {
       })
       applyOperationResponse(response, false)
     } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: toErrorMessage(error),
-      })
-      recordDiagnostic('Automatic Gmail follow-up send', error)
+      handleGmailOperationError('Automatic Gmail follow-up send', error)
     } finally {
       setIsProcessingQueue(false)
     }
@@ -1093,11 +1117,7 @@ function App() {
       })
       applyOperationResponse(response, false)
     } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: toErrorMessage(error),
-      })
-      recordDiagnostic('Automatic Gmail proposal follow-up send', error)
+      handleGmailOperationError('Automatic Gmail proposal follow-up send', error)
     } finally {
       setIsProcessingProposalQueue(false)
     }
@@ -1752,11 +1772,7 @@ function App() {
       })
       applyOperationResponse(response, false)
     } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: toErrorMessage(error),
-      })
-      recordDiagnostic('Process follow-up queue', error)
+      handleGmailOperationError('Process follow-up queue', error)
     } finally {
       setIsProcessingQueue(false)
     }
@@ -1771,11 +1787,7 @@ function App() {
       })
       applyOperationResponse(response, false)
     } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: toErrorMessage(error),
-      })
-      recordDiagnostic('Process proposal follow-up queue', error)
+      handleGmailOperationError('Process proposal follow-up queue', error)
     } finally {
       setIsProcessingProposalQueue(false)
     }
@@ -1790,11 +1802,7 @@ function App() {
       })
       applyOperationResponse(response, false)
     } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: toErrorMessage(error),
-      })
-      recordDiagnostic('Send client follow-up', error)
+      handleGmailOperationError('Send client follow-up', error)
     } finally {
       setBusyClientId(null)
     }
@@ -1809,11 +1817,7 @@ function App() {
       })
       applyOperationResponse(response, false)
     } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: toErrorMessage(error),
-      })
-      recordDiagnostic('Send proposal follow-up', error)
+      handleGmailOperationError('Send proposal follow-up', error)
     } finally {
       setBusyProposalId(null)
     }
