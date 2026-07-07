@@ -247,6 +247,16 @@ function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Something went wrong.'
 }
 
+function isInvalidSupabaseSessionError(error: unknown) {
+  const message = toErrorMessage(error).toLowerCase()
+
+  return (
+    message.includes('user from sub claim in jwt does not exist') ||
+    message.includes('jwt does not exist') ||
+    message.includes('sub claim in jwt')
+  )
+}
+
 function isGmailReconnectRequired(error: unknown) {
   const message = toErrorMessage(error).toLowerCase()
 
@@ -798,6 +808,43 @@ function App() {
     setDiagnostics((current) => [entry, ...current].slice(0, 10))
   }
 
+  async function recoverInvalidSession(message: string) {
+    try {
+      await webApp.logout()
+    } catch {
+      // Best effort only. If Supabase already invalidated the user, clear the UI anyway.
+    }
+
+    setSession(null)
+    setAppState(null)
+    setSettingsForm(null)
+    setGmailConnection(null)
+    setAdminState(null)
+    setPlanPricingDrafts({})
+    setLoading(false)
+    setIsAuthenticating(false)
+    setIsGoogleAuthenticating(false)
+    setIsCheckingGmailConnection(false)
+    setIsConnectingGmail(false)
+    setIsDisconnectingGmail(false)
+    setIsSubmittingClient(false)
+    setIsSubmittingProposal(false)
+    setIsSavingSettings(false)
+    setIsProcessingQueue(false)
+    setIsProcessingProposalQueue(false)
+    setBusyClientId(null)
+    setBusyProposalId(null)
+    setBusyAdminAccountId(null)
+    setBusyPlanPricingId(null)
+    setAuthForm(createInitialAuthForm())
+    setAuthMode('login')
+
+    setNotice({
+      tone: 'error',
+      message,
+    })
+  }
+
   function buildDiagnosticsReport() {
     return [
       'Hessa diagnostics report',
@@ -863,6 +910,14 @@ function App() {
   }
 
   function handleGmailOperationError(context: string, error: unknown) {
+    if (isInvalidSupabaseSessionError(error)) {
+      void recoverInvalidSession(
+        'Your session is no longer valid. Please sign in again to continue.',
+      )
+      recordDiagnostic(context, error)
+      return
+    }
+
     if (isGmailReconnectRequired(error)) {
       setGmailConnection({
         connected: false,
@@ -891,6 +946,14 @@ function App() {
       applyAppState(nextState, syncSettings || settingsForm === null)
     } catch (error) {
       const message = toErrorMessage(error)
+
+      if (isInvalidSupabaseSessionError(error)) {
+        await recoverInvalidSession(
+          'Your session is no longer valid. Please sign in again to continue.',
+        )
+        recordDiagnostic('Refresh workspace state', error)
+        return
+      }
 
       if (message === 'Please sign in to continue.') {
         setSession(null)
@@ -1041,6 +1104,14 @@ function App() {
       const nextConnection = await getGmailConnectionStatus()
       setGmailConnection(nextConnection)
     } catch (error) {
+      if (isInvalidSupabaseSessionError(error)) {
+        await recoverInvalidSession(
+          'Your session is no longer valid. Please sign in again to continue.',
+        )
+        recordDiagnostic('Gmail connection status', error)
+        return
+      }
+
       setGmailConnection({
         connected: false,
         connectedAt: null,
