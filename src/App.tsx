@@ -1030,23 +1030,6 @@ function App() {
     }
   }
 
-  const syncAuthSession = useEffectEvent(async () => {
-    try {
-      const nextSession = await webApp.getSession()
-      setSession(nextSession)
-
-      if (nextSession) {
-        setAuthForm(createInitialAuthForm())
-      }
-    } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: toErrorMessage(error),
-      })
-      recordDiagnostic('Sync auth session', error)
-    }
-  })
-
   async function refreshGmailConnection(showErrors = false) {
     if (!session) {
       return
@@ -1226,10 +1209,10 @@ function App() {
           setPlanPricingDrafts({})
           return
         }
-
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-          void syncAuthSession()
-        }
+        // Session refreshes are handled by the initial boot check and by the
+        // explicit login/register/password flows. Avoid re-reading auth state
+        // here because Supabase can throw if two requests compete for the same
+        // auth-token lock at once.
       }, 0)
     })
 
