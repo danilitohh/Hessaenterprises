@@ -116,6 +116,10 @@ vercel env add GMAIL_CRON_MAX_PER_RUN production
 
 `vercel.json` calls `/api/cron/gmail-followups` every hour. That endpoint validates `CRON_SECRET` and then calls `gmail-process-followups`. Vercel Cron Jobs run on production deployments only. If the project is on Vercel Hobby, hourly cron may require changing the schedule to daily or using another scheduler.
 
+To reduce the chance that a Free Plan Supabase project is paused for inactivity, this repo also includes `/api/cron/supabase-keepalive`, which performs a lightweight authenticated database read once per day. Set `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` in Vercel together with `CRON_SECRET`.
+
+This is a mitigation, not a guarantee. Supabase documents that Free Plan projects can still be paused, and paid projects are the reliable way to keep an instance always active.
+
 ## How The User Flow Works
 
 1. User logs into Hessa.

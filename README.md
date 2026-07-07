@@ -134,6 +134,19 @@ Tokens disponibles dentro de la plantilla:
 - El cron de Vercel esta configurado cada hora (`0 * * * *`). En planes Hobby de Vercel puede que debas cambiarlo a una frecuencia diaria o usar un scheduler externo.
 - Si Gmail no esta conectado para el usuario dueno del seguimiento, el intento queda registrado como fallido y no se envia desde otra cuenta.
 
+## Mantener Supabase activo
+
+Supabase puede pausar proyectos de Free Plan tras periodos de inactividad. Para reducir ese riesgo, este repo incluye un cron de keepalive que toca la base una vez al dia:
+
+- Ruta: `/api/cron/supabase-keepalive`
+- Requiere `CRON_SECRET`
+- Requiere `SUPABASE_SERVICE_ROLE_KEY` o `SUPABASE_SECRET_KEY` en Vercel
+
+Importante:
+
+- Esto ayuda a evitar pausas por inactividad, pero la unica garantia total es mover el proyecto a un plan pagado de Supabase.
+- Si el proyecto ya quedo pausado, hay que reactivarlo desde el dashboard de Supabase.
+
 ## Validacion realizada
 
 - `npm run lint`

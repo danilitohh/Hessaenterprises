@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/gmail-followups",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/supabase-keepalive",
+      "schedule": "15 12 * * *"
     }
   ],
   "rewrites": [
