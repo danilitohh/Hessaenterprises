@@ -38,11 +38,13 @@ import { supabase } from './supabaseClient'
 import { webApp } from './webApp'
 import './App.css'
 
+// Shared constants and small component-local types.
 const DEFAULT_TRY_COUNT = 4
 const MAX_SEQUENCE_TRIES = 100
 const DEFAULT_SCHEDULE_TIMES = ['09:00', '11:00', '14:00', '16:00']
 const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 
+// UI-only state shapes used by the page shell.
 type Notice = {
   tone: 'error' | 'info' | 'success'
   message: string
@@ -127,6 +129,7 @@ type ProposalFormState = {
   targetFollowUps: number
 }
 
+// Pure helper functions used throughout the workspace.
 function getDefaultScheduleTime(index: number) {
   return DEFAULT_SCHEDULE_TIMES[index % DEFAULT_SCHEDULE_TIMES.length] || '09:00'
 }
@@ -530,6 +533,7 @@ function mapSettingsToForm(settings: SettingsState): SettingsFormState {
   }
 }
 
+// Static copy and landing-page content.
 const dashboardMetrics = [
   { label: 'Upcoming follow-ups', value: '12' },
   { label: 'Pending proposals', value: '7' },
@@ -650,6 +654,7 @@ const accountStatusOptions: AccountStatus[] = ['active', 'suspended']
 
 const dashboardPageIds = new Set<DashboardPageId>(dashboardNavItems.map((item) => item.href))
 
+// Navigation helpers.
 function getInitialDashboardPage(): DashboardPageId {
   if (typeof window === 'undefined') {
     return 'dashboard'
@@ -749,7 +754,9 @@ function compareNullableDates(firstDate: string | null, secondDate: string | nul
   return first - second
 }
 
+// Main application shell.
 function App() {
+  // Local state and refs for authentication, workspace data, and UI overlays.
   const diagnosticIdRef = useRef(0)
   const [session, setSession] = useState<AuthSession | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
@@ -795,6 +802,7 @@ function App() {
   const [proposalTemplateChoice, setProposalTemplateChoice] = useState(0)
   const [templateEditor, setTemplateEditor] = useState<TemplateEditorState | null>(null)
 
+  // Diagnostics and recovery helpers.
   function recordDiagnostic(context: string, error: unknown) {
     diagnosticIdRef.current += 1
 
@@ -884,6 +892,7 @@ function App() {
     }
   }
 
+  // State synchronization helpers.
   function applyAppState(nextState: AppState, syncSettings: boolean) {
     startTransition(() => {
       setAppState(nextState)
@@ -940,6 +949,7 @@ function App() {
     setPlanPricingDrafts(createPlanPricingDrafts(nextAdminState.planPricing))
   }
 
+  // Remote refresh handlers for the signed-in workspace.
   const refreshState = useEffectEvent(async (syncSettings = false) => {
     try {
       const nextState = await webApp.getAppState()
@@ -1388,6 +1398,7 @@ function App() {
     }
   }, [session, gmailConnection?.connected, appState?.stats.dueNow, appState?.proposals])
 
+  // Form sizing helpers keep client and proposal sequences aligned.
   function updateClientSchedule(rawTargetContacts: number | string) {
     const targetContacts = normalizeTryCount(rawTargetContacts)
 
@@ -1442,6 +1453,7 @@ function App() {
     )
   }
 
+  // Authentication and external connection handlers.
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setIsAuthenticating(true)
@@ -1687,6 +1699,7 @@ function App() {
     }
   }
 
+  // Workspace form submission handlers.
   async function handleClientSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setIsSubmittingClient(true)
@@ -1738,6 +1751,7 @@ function App() {
     }
   }
 
+  // Template editor helpers and persistence.
   function updateTemplateDraft(
     workflow: TemplateWorkflow,
     index: number,
@@ -1817,6 +1831,7 @@ function App() {
     await saveSettingsChanges()
   }
 
+  // Queue processing handlers.
   async function handleProcessQueue() {
     setIsProcessingQueue(true)
 
@@ -1962,6 +1977,7 @@ function App() {
     }
   }
 
+  // Floating diagnostics drawer.
   const diagnosticsPanel = (
     <aside className={`diagnostics-panel ${isDiagnosticsOpen ? 'diagnostics-panel-open' : ''}`}>
       <button
@@ -2032,10 +2048,12 @@ function App() {
     </aside>
   )
 
+  // Route: password recovery screen.
   if (authMode === 'reset-password') {
     return (
       <main className="crm-shell recovery-shell">
         {diagnosticsPanel}
+        {/* Password recovery layout */}
         <section className="recovery-layout">
           <article className="panel recovery-brand-card">
             <div className="landing-brand-lockup">
@@ -2116,10 +2134,12 @@ function App() {
     )
   }
 
+  // Route: public landing page and authentication entry.
   if (!session) {
     return (
       <main className="crm-shell landing-shell">
         {diagnosticsPanel}
+        {/* Landing hero and account entry */}
         <section className="landing-hero-grid">
           <article className="panel landing-hero-panel">
             <div className="landing-hero-top">
@@ -2230,6 +2250,7 @@ function App() {
           </article>
         </section>
 
+        {/* Feature highlights, pricing, and sign-in form */}
         <section className="landing-content-grid">
           <div className="landing-main-flow">
             <section className="landing-section">
@@ -2457,10 +2478,12 @@ function App() {
     )
   }
 
+  // Route: loading state while session and workspace data resolve.
   if (loading || !appState || !settingsForm) {
     return (
       <main className="crm-shell">
         {diagnosticsPanel}
+        {/* Initial loading state */}
         <section className="loading-stage panel">
           <img alt="Hessa Enterprises" className="loading-wordmark" src={logoWordmark} />
           <div className="loading-copy">
@@ -2473,6 +2496,7 @@ function App() {
     )
   }
 
+  // Derived workspace metrics and filtered collections.
   const activeClients = appState.clients.filter((client) => client.status === 'active')
   const sortedActiveClients = [...activeClients].sort((first, second) =>
     compareNullableDates(first.nextContactAt, second.nextContactAt),
@@ -2566,6 +2590,7 @@ function App() {
       .toLowerCase()
       .includes(searchQuery)
   })
+  // Derived dashboard metrics, activity feeds, and template state.
   const totalEmailsSent =
     appState.clients.reduce((total, client) => total + client.sentContacts, 0) +
     appState.proposals.reduce((total, proposal) => total + proposal.sentFollowUps, 0)
@@ -2594,6 +2619,7 @@ function App() {
       value: gmailConnection?.connected ? gmailConnection.email || 'Connected' : 'Not connected',
     },
   ]
+  // Template picker state and activity feed slices.
   const activeAppointmentTemplateIndex = Math.min(
     appointmentTemplateChoice,
     Math.max(0, settingsForm.templates.length - 1),
@@ -2691,6 +2717,7 @@ function App() {
     },
   ]
 
+  // Route: super admin panel.
   if (isAdminRoute) {
     const canAccessAdmin = appState.currentUser.role === 'super_admin'
     const adminUsers =
@@ -2708,6 +2735,7 @@ function App() {
 
     return (
       <main className="dashboard-shell super-admin-shell">
+        {/* Super admin workspace */}
         {diagnosticsPanel}
 
         <aside className="dashboard-sidebar">
@@ -2790,6 +2818,7 @@ function App() {
             </section>
           ) : (
             <>
+              {/* Platform overview and high-level metrics */}
               <section className="dashboard-overview">
                 <div className="dashboard-heading">
                   <div>
@@ -2819,6 +2848,7 @@ function App() {
                 </div>
               </section>
 
+              {/* Billing readiness and plan pricing */}
               <section className="dashboard-card" id="admin-pricing">
                 <div className="dashboard-card-header">
                   <div>
@@ -2939,6 +2969,7 @@ function App() {
                 </div>
               </section>
 
+              {/* Global user registry */}
               <section className="dashboard-card" id="admin-users">
                 <div className="dashboard-card-header">
                   <div>
@@ -2979,6 +3010,7 @@ function App() {
                 )}
               </section>
 
+              {/* Account management */}
               <section className="dashboard-card" id="admin-accounts">
                 <div className="dashboard-card-header">
                   <div>
@@ -3105,8 +3137,10 @@ function App() {
     )
   }
 
+  // Main workspace dashboard.
   return (
     <main className="dashboard-shell">
+      {/* Main workspace dashboard */}
       {diagnosticsPanel}
 
       <aside className="dashboard-sidebar">
@@ -3184,6 +3218,7 @@ function App() {
 
         {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
 
+        {/* Template editor modal */}
         {activeTemplate && templateEditor ? (
           <div className="template-modal-backdrop" role="presentation">
             <section
@@ -3272,6 +3307,7 @@ function App() {
           </div>
         ) : null}
 
+        {/* Dashboard overview and KPI summary */}
         <section
           className="dashboard-overview"
           hidden={activeDashboardPage !== 'dashboard'}
@@ -3311,6 +3347,7 @@ function App() {
           </div>
         </section>
 
+        {/* Proposal pipeline and recent activity */}
         <section
           className="dashboard-primary-grid dashboard-single-grid"
           hidden={activeDashboardPage !== 'dashboard'}
@@ -3381,6 +3418,7 @@ function App() {
           </div>
         </section>
 
+        {/* Unified tracking view for appointments and proposals */}
         <section
           className="dashboard-card followup-dashboard-card"
           hidden={activeDashboardPage !== 'tracking'}
@@ -3456,6 +3494,7 @@ function App() {
           )}
         </section>
 
+        {/* Proposal workspace */}
         <section
           className="dashboard-card proposal-workspace-card"
           hidden={activeDashboardPage !== 'proposals'}
@@ -3736,6 +3775,7 @@ function App() {
           </div>
         </section>
 
+        {/* Settings and Gmail connection */}
         <section
           className="dashboard-operations-grid dashboard-single-grid"
           hidden={activeDashboardPage !== 'settings'}
@@ -3863,6 +3903,7 @@ function App() {
           </article>
         </section>
 
+        {/* Appointment workspace */}
         <section
           className="dashboard-card"
           hidden={activeDashboardPage !== 'appointments'}
@@ -4126,6 +4167,7 @@ function App() {
           </div>
         </section>
 
+        {/* Template management */}
         <section
           className="dashboard-card"
           hidden={activeDashboardPage !== 'templates'}

@@ -30,6 +30,7 @@ import type {
 import type { User } from '@supabase/supabase-js'
 import { getSupabaseClient, supabaseFunctionBaseUrl } from './supabaseClient'
 
+// Storage keys, sync markers, and workspace-wide defaults.
 const LEGACY_STORAGE_KEY = 'hessa-followup-web'
 const PLATFORM_STORAGE_KEY = 'hessa-followup-web:platform'
 const ACCOUNT_STORAGE_PREFIX = 'hessa-followup-web:account:'
@@ -50,6 +51,7 @@ const statusPriority = {
   canceled: 2,
 } as const
 
+// Local persistence models and registry snapshots.
 type Database = {
   accountId: string
   lastSyncedAt: string | null
@@ -60,6 +62,7 @@ type Database = {
   proposals: ProposalRecord[]
 }
 
+// Workspace platform registry used by admin and sync flows.
 type PlatformRegistry = {
   accounts: AccountRecord[]
   planPricing: PlanPricingRecord[]
@@ -91,6 +94,7 @@ type GmailSendFunctionResponse = {
 
 const remoteHydratedDatabases = new WeakSet<Database>()
 
+// Default email templates used when a workspace has not customized them yet.
 function createDefaultTemplate(contactNumber: number, accountId = ''): EmailTemplate {
   return {
     accountId,
@@ -202,6 +206,7 @@ const defaultDatabase: Database = Object.freeze({
   proposals: [],
 })
 
+// Generic ID generation and text normalization helpers.
 function createId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -230,6 +235,7 @@ function createId() {
   ].join('-')
 }
 
+// Validation and normalization helpers for records and form data.
 function isUuid(value: string) {
   return UUID_PATTERN.test(value)
 }
@@ -269,6 +275,7 @@ function getDefaultScheduleTime(index: number) {
   return DEFAULT_SCHEDULE_TIMES[index % DEFAULT_SCHEDULE_TIMES.length] || '09:00'
 }
 
+// Normalization helpers for legacy data, record payloads, and workspace migrations.
 function clampTargetContacts(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return DEFAULT_TRY_COUNT
@@ -695,6 +702,7 @@ function normalizeDatabase(rawData: unknown, accountId = ''): Database {
   return withDatabaseAccountId(database, accountId)
 }
 
+// Auth, account, and plan helpers.
 function getRedirectUrl(mode?: 'reset-password') {
   const url = new URL(window.location.href)
   url.search = ''
@@ -974,6 +982,7 @@ function normalizePlatformRegistry(rawPlatform: unknown): PlatformRegistry {
   }
 }
 
+// Platform registry storage helpers.
 function loadPlatformRegistry() {
   try {
     const stored = window.localStorage.getItem(PLATFORM_STORAGE_KEY)
@@ -1940,6 +1949,7 @@ async function deliverFollowUpEmail(
   }
 }
 
+// Runtime discovery and app-state assembly.
 function getRuntimeInfo(): RuntimeInfo {
   const userAgent = navigator.userAgent
   let browser = 'Current browser'
@@ -1977,6 +1987,7 @@ function getAppStateFromDatabase(
   }
 }
 
+// Supabase row adapters and merge helpers.
 type SupabaseWorkspaceRow = Record<string, unknown> & {
   account_id: string
   id: string
@@ -2615,6 +2626,7 @@ async function syncWorkspaceDatabaseToSupabase(
   }
 }
 
+// Workspace persistence and sync resolution.
 function persistDatabase(accountId: string, database: Database) {
   database.clients = sortClients(database.clients)
   database.proposals = sortProposals(database.proposals)
@@ -2939,6 +2951,7 @@ function buildOperationResponse(
   }
 }
 
+// Admin metrics and platform aggregation.
 function getAccountMetrics(accountId: string) {
   const database = loadDatabaseForAccount(accountId)
   const emailCount =
@@ -3478,6 +3491,7 @@ async function updateSupabasePlanPricing(pricing: PlanPricingRecord) {
   return true
 }
 
+// In-memory platform mutations used when Supabase is unavailable.
 function updatePlatformAccount(
   accountId: string,
   updater: (account: AccountRecord) => AccountRecord,
@@ -3510,6 +3524,7 @@ function updatePlatformPlanPricing(
   savePlatformRegistry(platform)
 }
 
+// Public workspace API consumed by the React app.
 export const webApp = {
   async getSession() {
     const supabase = getSupabaseClient()

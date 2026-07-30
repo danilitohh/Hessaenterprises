@@ -1,14 +1,17 @@
 import { createClient } from '@supabase/supabase-js'
 
+// The frontend is locked to one Supabase project to avoid accidental drift.
 const LOCKED_SUPABASE_PROJECT_REF = 'eaocwrgbqeakyycmtbah'
 const LOCKED_SUPABASE_URL = `https://${LOCKED_SUPABASE_PROJECT_REF}.supabase.co`
 
+// Normalized result of validating the environment variables used by the client.
 type SupabaseConfig = {
   anonKey: string
   error: string | null
   url: string
 }
 
+// Validate the configured Supabase URL and public key before the app boots.
 function createSupabaseConfig(): SupabaseConfig {
   const rawUrl = import.meta.env.VITE_SUPABASE_URL?.trim() ?? ''
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() ?? ''
@@ -73,6 +76,7 @@ function createSupabaseConfig(): SupabaseConfig {
 
 const supabaseConfig = createSupabaseConfig()
 
+// Export the validated client and the function base URL used by edge functions.
 export const supabaseConfigError = supabaseConfig.error
 export const isSupabaseConfigured = !supabaseConfigError
 export const supabaseFunctionBaseUrl = `${LOCKED_SUPABASE_URL}/functions/v1`

@@ -1,3 +1,4 @@
+/* Page shells and outer layouts. */
 .crm-shell {
   width: min(1420px, calc(100% - 40px));
   margin: 0 auto;
@@ -38,6 +39,7 @@
   color: var(--ink-strong);
 }
 
+/* Shared card surfaces and glass panels. */
 .panel {
   position: relative;
   overflow: hidden;
@@ -59,6 +61,7 @@
   pointer-events: none;
 }
 
+/* Grid systems used across landing and workspace layouts. */
 .hero-grid,
 .landing-hero-grid,
 .landing-content-grid,
@@ -98,6 +101,7 @@
   gap: 22px;
 }
 
+/* Landing brand blocks, hero surfaces, and preview cards. */
 .brand-stage,
 .home-hero,
 .landing-hero-panel,
@@ -174,6 +178,7 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 243, 236, 0.94));
 }
 
+/* Labels, chips, and lockup headers. */
 .brand-stage-header,
 .home-hero-top,
 .landing-hero-top,
@@ -531,6 +536,7 @@
   color: var(--danger-strong);
 }
 
+/* Landing feature sections, process steps, and pricing blocks. */
 .landing-section,
 .landing-section-heading {
   display: grid;
@@ -695,6 +701,7 @@
   scroll-margin-top: 24px;
 }
 
+/* Password recovery flow. */
 .recovery-shell {
   min-height: 100vh;
   display: grid;
@@ -768,6 +775,7 @@
   padding: 38px;
 }
 
+/* Authentication content, notices, and helper cards. */
 .home-feature-list {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
@@ -964,6 +972,7 @@
   color: var(--ink-soft);
 }
 
+/* Floating diagnostics overlay. */
 .diagnostics-panel {
   position: fixed;
   right: 22px;
@@ -1101,6 +1110,7 @@
   line-height: 1.55;
 }
 
+/* Dashboard workspace shell and shared account surfaces. */
 .dashboard-shell {
   --dashboard-bg: #f7f2ea;
   --dashboard-card: #ffffff;
@@ -1663,6 +1673,7 @@
   background: rgba(197, 48, 48, 0.06);
 }
 
+/* Dashboard grids, work columns, and form layouts. */
 .dashboard-primary-grid,
 .dashboard-operations-grid,
 .client-workspace-grid {
@@ -2060,6 +2071,7 @@
   color: var(--gold-strong);
 }
 
+/* Form controls and editor inputs. */
 .field {
   display: grid;
   gap: 8px;
@@ -2227,6 +2239,7 @@
     rgba(255, 255, 255, 0.82);
 }
 
+/* Template editor modal. */
 .template-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2296,6 +2309,7 @@
   gap: 10px;
 }
 
+/* Dark callout panels and board sections. */
 .board-stage {
   background: linear-gradient(135deg, #1f3448, #31485f);
   border-color: rgba(31, 52, 72, 0.4);
@@ -2511,6 +2525,7 @@
   width: 100%;
 }
 
+/* Button variants. */
 .primary-button,
 .secondary-button,
 .ghost-button,
@@ -2572,6 +2587,7 @@
   box-shadow: none;
 }
 
+/* Responsive rules for the landing, auth, and base layouts. */
 @media (max-width: 1360px) {
   .auth-layout,
   .hero-grid,
@@ -2745,6 +2761,7 @@
   }
 }
 
+/* Responsive rules for the dashboard and admin layouts. */
 @media (max-width: 1280px) {
   .dashboard-shell {
     grid-template-columns: 1fr;

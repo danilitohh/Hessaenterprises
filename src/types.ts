@@ -1,3 +1,4 @@
+// Core runtime and identity models.
 export type RuntimeInfo = {
   browser: string
   platform: 'web'
@@ -15,6 +16,7 @@ export type SubscriptionStatus =
   | 'trial'
 export type AccountStatus = 'active' | 'suspended'
 
+// User identity and account-level records.
 export type AuthUser = {
   accountId: string
   id: string
@@ -66,6 +68,7 @@ export type AuthActionResult = {
   session: AuthSession | null
 }
 
+// Workspace records and workflow state.
 export type FollowUpStatus = 'prepared' | 'failed'
 export type ClientStatus = 'active' | 'finished' | 'canceled'
 export type ProposalStatus = 'active' | 'finished' | 'canceled'
@@ -132,6 +135,7 @@ export type ProposalRecord = {
   history: FollowUpHistoryItem[]
 }
 
+// Aggregated state used by the dashboard and admin surfaces.
 export type DashboardStats = {
   active: number
   canceled: number
@@ -155,6 +159,7 @@ export type SettingsState = {
   }
 }
 
+// Application state and platform-wide admin summaries.
 export type AppState = {
   account: AccountRecord
   currentUser: AuthUser
@@ -189,6 +194,7 @@ export type AdminPlatformState = {
   planPricing: PlanPricingRecord[]
 }
 
+// Operation responses and workspace form payloads.
 export type ProcessResult = {
   failed: number
   message: string
@@ -200,6 +206,7 @@ export type AppOperationResponse = AppState & {
   result?: ProcessResult
 }
 
+// Form payloads exchanged with the app layer.
 export type ClientInput = {
   name: string
   email: string

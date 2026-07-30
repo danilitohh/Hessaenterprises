@@ -1,3 +1,4 @@
+/* Global canvas, typography, and base color tokens. */
 :root {
   --canvas-top: #f8f3ec;
   --canvas-bottom: #efe6d8;
@@ -111,6 +112,7 @@ code {
   font-size: 0.9rem;
 }
 
+/* Small uppercase labels used as section markers across the UI. */
 .eyebrow {
   display: inline-flex;
   align-items: center;

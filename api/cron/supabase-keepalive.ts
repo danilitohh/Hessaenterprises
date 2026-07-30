@@ -2,6 +2,7 @@ declare const process: {
   env: Record<string, string | undefined>
 }
 
+// Vercel cron endpoint that keeps the Supabase project warm.
 const LOCKED_SUPABASE_URL = 'https://eaocwrgbqeakyycmtbah.supabase.co'
 
 export const config = {
@@ -34,6 +35,7 @@ function getSupabaseServiceKey() {
   )
 }
 
+// Validate the cron secret and perform a lightweight authenticated ping.
 export default async function handler(request: Request) {
   const cronSecret = process.env.CRON_SECRET?.trim()
   const serviceKey = getSupabaseServiceKey()

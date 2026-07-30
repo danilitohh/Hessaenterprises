@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
+// Locked auth configuration used to prevent accidental Supabase drift.
 const EXPECTED_SUPABASE_PROJECT_REF = 'eaocwrgbqeakyycmtbah'
 const EXPECTED_SUPABASE_URL = `https://${EXPECTED_SUPABASE_PROJECT_REF}.supabase.co`
 const ACCEPTED_ANON_KEY_HASHES = new Set([
@@ -9,9 +10,11 @@ const ACCEPTED_ANON_KEY_HASHES = new Set([
   '42b5aa17d4e0ca3636be1cc035124834a9ebfd673a73f1e233b76357887df50f',
 ])
 
+// Load the environment files in order so local overrides still win.
 const envFileOrder = ['.env', '.env.local', '.env.production', '.env.production.local']
 const env = { ...process.env }
 
+// Minimal parser for KEY=VALUE lines in .env files.
 function parseEnvLine(line) {
   const trimmed = line.trim()
 
@@ -54,11 +57,13 @@ for (const filename of envFileOrder) {
   }
 }
 
+// Exit early with a single clear error message.
 function fail(message) {
   console.error(`\nAuth config lock failed: ${message}\n`)
   process.exit(1)
 }
 
+// Normalize the configured URL and confirm it still points at the locked project.
 function normalizeSupabaseUrl(rawUrl) {
   try {
     const url = new URL(rawUrl)

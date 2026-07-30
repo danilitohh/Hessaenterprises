@@ -2,6 +2,7 @@ declare const process: {
   env: Record<string, string | undefined>
 }
 
+// Vercel cron endpoint that forwards due Gmail follow-ups to Supabase.
 const LOCKED_SUPABASE_URL = 'https://eaocwrgbqeakyycmtbah.supabase.co'
 
 export const config = {
@@ -32,6 +33,7 @@ function getMaxPerRun() {
   return Number.isFinite(value) ? Math.min(100, Math.max(1, Math.trunc(value))) : 25
 }
 
+// Validate the cron secret and proxy the request to the Supabase Edge Function.
 export default async function handler(request: Request) {
   const cronSecret = process.env.CRON_SECRET?.trim()
 

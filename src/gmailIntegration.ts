@@ -1,5 +1,6 @@
 import { getSupabaseClient } from './supabaseClient'
 
+// Gmail connection status exposed to the workspace UI.
 export type GmailConnectionStatus = {
   connected: boolean
   connectedAt: string | null
@@ -7,10 +8,12 @@ export type GmailConnectionStatus = {
   mode: 'draft' | 'gmail'
 }
 
+// OAuth bootstrap response from the edge function.
 type GmailOAuthStartResponse = {
   authUrl: string
 }
 
+// Build the callback URL that Gmail should return to after consent.
 function getCurrentRedirectUrl() {
   const url = new URL(window.location.href)
   url.searchParams.set('gmail', 'connected')
@@ -19,6 +22,7 @@ function getCurrentRedirectUrl() {
   return url.toString()
 }
 
+// Read the current Gmail link state from Supabase.
 export async function getGmailConnectionStatus(): Promise<GmailConnectionStatus> {
   const supabase = getSupabaseClient()
   const { data, error } = await supabase.functions.invoke<GmailConnectionStatus>('gmail-status')
@@ -37,6 +41,7 @@ export async function getGmailConnectionStatus(): Promise<GmailConnectionStatus>
   )
 }
 
+// Start the OAuth flow and redirect the browser to Google.
 export async function connectGmailAccount() {
   const supabase = getSupabaseClient()
   const { data, error } = await supabase.functions.invoke<GmailOAuthStartResponse>(
@@ -65,6 +70,7 @@ export async function connectGmailAccount() {
   window.location.href = data.authUrl
 }
 
+// Remove the Gmail link for the active account.
 export async function disconnectGmailAccount() {
   const supabase = getSupabaseClient()
   const { error } = await supabase.functions.invoke('gmail-disconnect', {
